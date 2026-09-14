@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM node:22-bookworm AS build
 
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -25,6 +23,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
+COPY index.html vite.config.js jsconfig.json components.json ./
 COPY src ./src
 COPY src-tauri ./src-tauri
 

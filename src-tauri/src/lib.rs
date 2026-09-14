@@ -1,22 +1,36 @@
 use bech32::{Bech32, Hrp};
 use secp256k1::{rand, Secp256k1, SecretKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 use zeroize::Zeroizing;
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+const METADATA_FILE: &str = "identity.json";
+const PUBLIC_KEY_FILE: &str = "public.key";
+const PRIVATE_KEY_FILE: &str = "private.key";
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentitySummary {
+    id: String,
+    name: String,
+    created_at: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GenerateResult {
-    identity_name: String,
+struct IdentityDetail {
+    id: String,
+    name: String,
+    created_at: u64,
     public_key: String,
-    public_path: String,
-    private_path: String,
+    private_key: String,
 }
 
 fn encode_key(prefix: &str, bytes: &[u8]) -> String {
@@ -24,31 +38,40 @@ fn encode_key(prefix: &str, bytes: &[u8]) -> String {
     bech32::encode::<Bech32>(hrp, bytes).expect("32-byte NIP-19 key must encode")
 }
 
-fn normalize_name(input: &str) -> Result<String, String> {
+fn validate_name(input: &str) -> Result<String, String> {
     let name = input.trim();
     if name.is_empty() {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| "系统时间不可用。".to_string())?
-            .as_millis();
-        return Ok(format!("buzz-member-{timestamp}"));
+        return Err("身份名称不能为空。".to_string());
     }
-
-    let valid = name.len() <= 64
-        && name
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_alphanumeric())
-        && name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        });
-    if !valid {
-        return Err("身份名称只能包含字母、数字、点、下划线和短横线，且必须以字母或数字开头。".to_string());
+    if name.chars().count() > 80 || name.chars().any(char::is_control) {
+        return Err("身份名称最多 80 个字符，且不能包含控制字符。".to_string());
     }
     Ok(name.to_string())
 }
 
-fn write_key_file(path: &Path, value: &[u8]) -> Result<(), String> {
+fn validate_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.len() > 40 || !id.chars().all(|character| character.is_ascii_digit()) {
+        return Err("身份记录无效。".to_string());
+    }
+    Ok(())
+}
+
+fn identities_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("identities"))
+        .map_err(|error| format!("无法获取应用数据目录：{error}"))
+}
+
+fn ensure_root(root: &Path) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|error| format!("无法创建应用数据目录：{error}"))?;
+    #[cfg(unix)]
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("无法设置应用数据目录权限：{error}"))?;
+    Ok(())
+}
+
+fn write_new_file(path: &Path, value: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -56,56 +79,29 @@ fn write_key_file(path: &Path, value: &[u8]) -> Result<(), String> {
 
     let mut file = options
         .open(path)
-        .map_err(|error| format!("无法创建密钥文件：{error}"))?;
+        .map_err(|error| format!("无法创建身份文件：{error}"))?;
     file.write_all(value)
-        .map_err(|error| format!("无法写入密钥文件：{error}"))
+        .map_err(|error| format!("无法写入身份文件：{error}"))
 }
 
-fn create_identity(target: &Path, identity_name: String) -> Result<GenerateResult, String> {
-    let secp = Secp256k1::new();
-    let mut secret_key = SecretKey::new(&mut rand::rng());
-    let secret_bytes = Zeroizing::new(secret_key.secret_bytes());
-    let (x_only_public_key, _) = secret_key.x_only_public_key(&secp);
-    let public_key = encode_key("npub", &x_only_public_key.serialize());
-    let private_key = Zeroizing::new(encode_key("nsec", secret_bytes.as_ref()));
-
-    let public_path = target.join("public.key");
-    let private_path = target.join("private.key");
-    let write_result = (|| {
-        write_key_file(&private_path, private_key.as_bytes())?;
-        write_key_file(&public_path, public_key.as_bytes())?;
-        Ok(GenerateResult {
-            identity_name,
-            public_key,
-            public_path: public_path.to_string_lossy().into_owned(),
-            private_path: private_path.to_string_lossy().into_owned(),
-        })
-    })();
-
-    secret_key.non_secure_erase();
-    write_result
+fn timestamp() -> Result<(String, u64), String> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "系统时间不可用。".to_string())?;
+    Ok((elapsed.as_nanos().to_string(), elapsed.as_millis() as u64))
 }
 
-#[tauri::command]
-fn generate_identity(name: String, directory: String) -> Result<GenerateResult, String> {
-    if directory.trim().is_empty() {
-        return Err("请先选择保存位置。".to_string());
-    }
-
-    let parent = PathBuf::from(directory);
-    if !parent.is_dir() {
-        return Err("选择的保存位置不存在。".to_string());
-    }
-
-    let identity_name = normalize_name(&name)?;
-    let target = parent.join(&identity_name);
-    fs::create_dir(&target).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            "该身份名称已经存在，请换一个名称。".to_string()
-        } else {
-            format!("无法创建身份目录：{error}")
-        }
-    })?;
+fn create_identity_at(
+    root: &Path,
+    name: String,
+    id: String,
+    created_at: u64,
+) -> Result<IdentityDetail, String> {
+    ensure_root(root)?;
+    validate_id(&id)?;
+    let name = validate_name(&name)?;
+    let target = root.join(&id);
+    fs::create_dir(&target).map_err(|error| format!("无法创建身份目录：{error}"))?;
 
     #[cfg(unix)]
     if let Err(error) = fs::set_permissions(&target, fs::Permissions::from_mode(0o700)) {
@@ -113,22 +109,145 @@ fn generate_identity(name: String, directory: String) -> Result<GenerateResult, 
         return Err(format!("无法设置身份目录权限：{error}"));
     }
 
-    match create_identity(&target, identity_name) {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            let _ = fs::remove_file(target.join("private.key"));
-            let _ = fs::remove_file(target.join("public.key"));
-            let _ = fs::remove_dir(&target);
-            Err(error)
+    let secp = Secp256k1::new();
+    let mut secret_key = SecretKey::new(&mut rand::rng());
+    let secret_bytes = Zeroizing::new(secret_key.secret_bytes());
+    let (x_only_public_key, _) = secret_key.x_only_public_key(&secp);
+    let public_key = encode_key("npub", &x_only_public_key.serialize());
+    let private_key = Zeroizing::new(encode_key("nsec", secret_bytes.as_ref()));
+    let summary = IdentitySummary {
+        id: id.clone(),
+        name: name.clone(),
+        created_at,
+    };
+
+    let write_result = (|| {
+        let metadata = serde_json::to_vec(&summary)
+            .map_err(|error| format!("无法保存身份信息：{error}"))?;
+        write_new_file(&target.join(PRIVATE_KEY_FILE), private_key.as_bytes())?;
+        write_new_file(&target.join(PUBLIC_KEY_FILE), public_key.as_bytes())?;
+        write_new_file(&target.join(METADATA_FILE), &metadata)?;
+        Ok(IdentityDetail {
+            id,
+            name,
+            created_at,
+            public_key,
+            private_key: private_key.to_string(),
+        })
+    })();
+
+    secret_key.non_secure_erase();
+    if write_result.is_err() {
+        let _ = fs::remove_dir_all(&target);
+    }
+    write_result
+}
+
+fn read_summary(target: &Path) -> Result<IdentitySummary, String> {
+    let value = fs::read_to_string(target.join(METADATA_FILE))
+        .map_err(|error| format!("无法读取身份信息：{error}"))?;
+    serde_json::from_str(&value).map_err(|error| format!("身份信息已损坏：{error}"))
+}
+
+fn list_identities_at(root: &Path) -> Result<Vec<IdentitySummary>, String> {
+    ensure_root(root)?;
+    let mut identities = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| format!("无法读取身份列表：{error}"))? {
+        let entry = entry.map_err(|error| format!("无法读取身份列表：{error}"))?;
+        if entry
+            .file_type()
+            .map_err(|error| format!("无法读取身份列表：{error}"))?
+            .is_dir()
+        {
+            let summary = read_summary(&entry.path())?;
+            validate_id(&summary.id)?;
+            identities.push(summary);
         }
     }
+    identities.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(identities)
+}
+
+fn read_identity_at(root: &Path, id: &str) -> Result<IdentityDetail, String> {
+    validate_id(id)?;
+    let target = root.join(id);
+    let summary = read_summary(&target)?;
+    if summary.id != id {
+        return Err("身份记录已损坏。".to_string());
+    }
+    let public_key = fs::read_to_string(target.join(PUBLIC_KEY_FILE))
+        .map_err(|error| format!("无法读取公钥：{error}"))?;
+    let private_key = fs::read_to_string(target.join(PRIVATE_KEY_FILE))
+        .map_err(|error| format!("无法读取私钥：{error}"))?;
+    Ok(IdentityDetail {
+        id: summary.id,
+        name: summary.name,
+        created_at: summary.created_at,
+        public_key,
+        private_key,
+    })
+}
+
+fn rename_identity_at(root: &Path, id: &str, name: &str) -> Result<IdentitySummary, String> {
+    validate_id(id)?;
+    let target = root.join(id);
+    let mut summary = read_summary(&target)?;
+    if summary.id != id {
+        return Err("身份记录已损坏。".to_string());
+    }
+    summary.name = validate_name(name)?;
+    let metadata = serde_json::to_vec(&summary)
+        .map_err(|error| format!("无法保存身份信息：{error}"))?;
+    fs::write(target.join(METADATA_FILE), metadata)
+        .map_err(|error| format!("无法保存身份名称：{error}"))?;
+    Ok(summary)
+}
+
+fn delete_identity_at(root: &Path, id: &str) -> Result<(), String> {
+    validate_id(id)?;
+    let target = root.join(id);
+    if !target.is_dir() {
+        return Err("身份记录不存在。".to_string());
+    }
+    fs::remove_dir_all(target).map_err(|error| format!("无法删除身份记录：{error}"))
+}
+
+#[tauri::command]
+fn list_identities(app: AppHandle) -> Result<Vec<IdentitySummary>, String> {
+    list_identities_at(&identities_root(&app)?)
+}
+
+#[tauri::command]
+fn generate_identity(app: AppHandle, name: String) -> Result<IdentityDetail, String> {
+    let (id, created_at) = timestamp()?;
+    create_identity_at(&identities_root(&app)?, name, id, created_at)
+}
+
+#[tauri::command]
+fn get_identity(app: AppHandle, id: String) -> Result<IdentityDetail, String> {
+    read_identity_at(&identities_root(&app)?, &id)
+}
+
+#[tauri::command]
+fn rename_identity(app: AppHandle, id: String, name: String) -> Result<IdentitySummary, String> {
+    rename_identity_at(&identities_root(&app)?, &id, &name)
+}
+
+#[tauri::command]
+fn delete_identity(app: AppHandle, id: String) -> Result<(), String> {
+    delete_identity_at(&identities_root(&app)?, &id)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![generate_identity])
+        .invoke_handler(tauri::generate_handler![
+            list_identities,
+            generate_identity,
+            get_identity,
+            rename_identity,
+            delete_identity
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Buzz Identity");
 }
@@ -152,31 +271,44 @@ mod tests {
     }
 
     #[test]
-    fn writes_keys_once_with_private_permissions() {
+    fn manages_identities_in_app_storage() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!("buzz-identity-test-{unique}"));
-        fs::create_dir(&root).unwrap();
 
-        let result = generate_identity(
-            "teammate-test".to_string(),
-            root.to_string_lossy().into_owned(),
+        let first = create_identity_at(&root, "测试账号".to_string(), "1001".to_string(), 1001)
+            .unwrap();
+        let second = create_identity_at(
+            &root,
+            "2026-09-14 18:00:00".to_string(),
+            "1002".to_string(),
+            1002,
         )
         .unwrap();
-        assert!(result.public_key.starts_with("npub1"));
-        assert_eq!(fs::read_to_string(&result.public_path).unwrap(), result.public_key);
-        let private = Zeroizing::new(fs::read_to_string(&result.private_path).unwrap());
-        assert!(private.starts_with("nsec1"));
+        assert!(first.public_key.starts_with("npub1"));
+        assert!(first.private_key.starts_with("nsec1"));
+        assert_eq!(list_identities_at(&root).unwrap()[0].id, second.id);
+
+        let renamed = rename_identity_at(&root, &first.id, "同事 A").unwrap();
+        assert_eq!(renamed.name, "同事 A");
+        assert_eq!(read_identity_at(&root, &first.id).unwrap().name, "同事 A");
 
         #[cfg(unix)]
-        {
-            assert_eq!(fs::metadata(&result.public_path).unwrap().permissions().mode() & 0o777, 0o600);
-            assert_eq!(fs::metadata(&result.private_path).unwrap().permissions().mode() & 0o777, 0o600);
-        }
+        assert_eq!(
+            fs::metadata(root.join(&first.id).join(PRIVATE_KEY_FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
 
-        assert!(generate_identity("teammate-test".to_string(), root.to_string_lossy().into_owned()).is_err());
+        delete_identity_at(&root, &first.id).unwrap();
+        assert_eq!(list_identities_at(&root).unwrap().len(), 1);
+        assert!(validate_name("  ").is_err());
+        assert!(read_identity_at(&root, "../secret").is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

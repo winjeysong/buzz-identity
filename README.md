@@ -1,6 +1,6 @@
-# Buzz Identity
+# Artpal Buzz Identity
 
-为 Buzz 自托管成员在本机生成独立 Nostr 身份。应用只展示公钥，私钥由 Rust 后端直接写入用户选择的目录。
+为 Buzz 自托管成员在本机生成并管理 Nostr 身份。身份记录和密钥自动保存在系统应用数据目录中，支持查看、复制、重命名和删除。
 
 ## 下载客户端
 
