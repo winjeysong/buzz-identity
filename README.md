@@ -4,11 +4,13 @@
 
 ## 下载客户端
 
-每次推送到 `main` 分支后，GitHub Actions 会构建以下安装包，可在对应工作流的 Artifacts 中下载：
+每次推送到 `main` 分支后，GitHub Actions 会读取应用版本并创建对应的 `v<版本号>` Release：
 
 - Windows x64：NSIS `.exe`
 - macOS Apple Silicon：`.dmg`
 - macOS Intel：`.dmg`
+
+发布新版本前需更新 `src-tauri/tauri.conf.json` 中的 `version`。
 
 安装包暂未配置商业代码签名。macOS 首次打开时可能需要在“隐私与安全性”中手动允许。
 
