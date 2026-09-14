@@ -1,0 +1,4 @@
+/dist
+/node_modules
+/.pnpm-store
+/src-tauri/target

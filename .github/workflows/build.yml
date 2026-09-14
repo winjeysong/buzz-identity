@@ -1,0 +1,73 @@
+name: 构建桌面客户端
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin --bundles dmg
+            artifactName: buzz-identity-macos-arm64
+            artifactPath: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: macOS Intel
+            platform: macos-latest
+            args: --target x86_64-apple-darwin --bundles dmg
+            artifactName: buzz-identity-macos-x64
+            artifactPath: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: Windows x64
+            platform: windows-latest
+            args: --bundles nsis
+            artifactName: buzz-identity-windows-x64
+            artifactPath: src-tauri/target/release/bundle/nsis/*.exe
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 测试密钥生成逻辑
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: 构建安装包
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: ${{ matrix.args }}
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifactName }}
+          path: ${{ matrix.artifactPath }}
+          if-no-files-found: error
+          retention-days: 14

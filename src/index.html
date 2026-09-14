@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Buzz Identity</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./main.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="heading">
+        <div class="mark" aria-hidden="true">B</div>
+        <div>
+          <p class="eyebrow">BUZZ IDENTITY</p>
+          <h1>创建你的 Buzz 身份</h1>
+          <p class="subtitle">密钥只在本机生成，私钥不会显示在界面中。</p>
+        </div>
+      </header>
+
+      <form id="identity-form" class="panel">
+        <label for="identity-name">身份名称</label>
+        <input
+          id="identity-name"
+          name="identity-name"
+          maxlength="64"
+          autocomplete="off"
+          placeholder="例如 wangwu（留空自动生成）"
+        />
+
+        <label>保存位置</label>
+        <button id="choose-directory" class="secondary" type="button">选择文件夹</button>
+        <p id="directory-path" class="path">尚未选择</p>
+
+        <button id="generate" class="primary" type="submit">生成身份密钥</button>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </form>
+
+      <section id="result" class="result" hidden>
+        <div class="result-title">
+          <div>
+            <p class="eyebrow">创建成功</p>
+            <h2 id="result-name"></h2>
+          </div>
+          <button id="copy-public-key" class="copy" type="button">复制公钥</button>
+        </div>
+        <code id="public-key"></code>
+        <dl>
+          <div>
+            <dt>公钥文件</dt>
+            <dd id="public-path"></dd>
+          </div>
+          <div>
+            <dt>私钥文件</dt>
+            <dd id="private-path"></dd>
+          </div>
+        </dl>
+        <p class="warning">只把 public.key 发给管理员。private.key 仅供本人使用。</p>
+      </section>
+    </main>
+  </body>
+</html>
