@@ -1,6 +1,6 @@
 [package]
 name = "buzz-identity"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local Artpal Buzz and Nostr identity generator"
 edition = "2021"
 rust-version = "1.77.2"
