@@ -54,34 +54,52 @@ function summaryOf(identity) {
   };
 }
 
-function KeyCard({ icon: Icon, label, value, copied, onCopy, privateKey = false }) {
+function KeyCard({ icon: Icon, label, values, copied, onCopy, privateKey = false }) {
   return (
     <section className="rounded-2xl border bg-card p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <span
-            className={cn(
-              "grid size-9 place-items-center rounded-xl",
-              privateKey ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
-            )}
-          >
-            <Icon className="size-[18px]" />
-          </span>
-          <div>
-            <h2 className="text-sm font-semibold">{label}</h2>
-            <p className="text-xs text-muted-foreground">
-              {privateKey ? "请勿发送给任何人" : "可发送给 Buzz 管理员"}
-            </p>
-          </div>
+      <div className="mb-4 flex items-center gap-2.5">
+        <span
+          className={cn(
+            "grid size-9 place-items-center rounded-xl",
+            privateKey ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700",
+          )}
+        >
+          <Icon className="size-[18px]" />
+        </span>
+        <div>
+          <h2 className="text-sm font-semibold">{label}</h2>
+          <p className="text-xs text-muted-foreground">
+            {privateKey ? "请勿发送给任何人" : "可发送给 Buzz 管理员"}
+          </p>
         </div>
-        <Button variant="outline" size="sm" onClick={onCopy} aria-label={`复制${label}`}>
-          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          {copied ? "已复制" : "复制"}
-        </Button>
       </div>
-      <code className="block select-text break-all rounded-xl bg-muted px-4 py-3 font-mono text-[13px] leading-6 text-foreground">
-        {value}
-      </code>
+
+      <div className="space-y-3">
+        {values.map((item) => (
+          <div key={item.kind}>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <span className="text-xs font-medium text-muted-foreground">{item.format}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                onClick={() => onCopy(item.value, item.kind)}
+                aria-label={`复制${label} ${item.format}`}
+              >
+                {copied === item.kind ? (
+                  <Check className="size-3.5" />
+                ) : (
+                  <Copy className="size-3.5" />
+                )}
+                {copied === item.kind ? "已复制" : "复制"}
+              </Button>
+            </div>
+            <code className="block select-text break-all rounded-xl bg-muted px-4 py-3 font-mono text-[13px] leading-6 text-foreground">
+              {item.value}
+            </code>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -377,16 +395,22 @@ export default function App() {
               <KeyCard
                 icon={Radio}
                 label="公钥"
-                value={detail.publicKey}
-                copied={copied === "public"}
-                onCopy={() => copyKey(detail.publicKey, "public")}
+                values={[
+                  { format: "NIP-19", value: detail.publicKey, kind: "public-nip19" },
+                  { format: "64 位 Hex", value: detail.publicKeyHex, kind: "public-hex" },
+                ]}
+                copied={copied}
+                onCopy={copyKey}
               />
               <KeyCard
                 icon={LockKeyhole}
                 label="私钥"
-                value={detail.privateKey}
-                copied={copied === "private"}
-                onCopy={() => copyKey(detail.privateKey, "private")}
+                values={[
+                  { format: "NIP-19", value: detail.privateKey, kind: "private-nip19" },
+                  { format: "64 位 Hex", value: detail.privateKeyHex, kind: "private-hex" },
+                ]}
+                copied={copied}
+                onCopy={copyKey}
                 privateKey
               />
             </div>

@@ -30,12 +30,33 @@ struct IdentityDetail {
     name: String,
     created_at: u64,
     public_key: String,
+    public_key_hex: String,
     private_key: String,
+    private_key_hex: String,
 }
 
 fn encode_key(prefix: &str, bytes: &[u8]) -> String {
     let hrp = Hrp::parse(prefix).expect("fixed NIP-19 prefix must be valid");
     bech32::encode::<Bech32>(hrp, bytes).expect("32-byte NIP-19 key must encode")
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        value.push(HEX[(byte >> 4) as usize] as char);
+        value.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    value
+}
+
+fn decode_key_hex(prefix: &str, value: &str) -> Result<String, String> {
+    let (hrp, bytes) = bech32::decode(value).map_err(|_| "身份密钥已损坏。".to_string())?;
+    let expected = Hrp::parse(prefix).expect("fixed NIP-19 prefix must be valid");
+    if hrp != expected || bytes.len() != 32 {
+        return Err("身份密钥已损坏。".to_string());
+    }
+    Ok(encode_hex(&bytes))
 }
 
 fn validate_name(input: &str) -> Result<String, String> {
@@ -113,8 +134,11 @@ fn create_identity_at(
     let mut secret_key = SecretKey::new(&mut rand::rng());
     let secret_bytes = Zeroizing::new(secret_key.secret_bytes());
     let (x_only_public_key, _) = secret_key.x_only_public_key(&secp);
-    let public_key = encode_key("npub", &x_only_public_key.serialize());
+    let public_bytes = x_only_public_key.serialize();
+    let public_key = encode_key("npub", &public_bytes);
+    let public_key_hex = encode_hex(&public_bytes);
     let private_key = Zeroizing::new(encode_key("nsec", secret_bytes.as_ref()));
+    let private_key_hex = encode_hex(secret_bytes.as_ref());
     let summary = IdentitySummary {
         id: id.clone(),
         name: name.clone(),
@@ -122,8 +146,8 @@ fn create_identity_at(
     };
 
     let write_result = (|| {
-        let metadata = serde_json::to_vec(&summary)
-            .map_err(|error| format!("无法保存身份信息：{error}"))?;
+        let metadata =
+            serde_json::to_vec(&summary).map_err(|error| format!("无法保存身份信息：{error}"))?;
         write_new_file(&target.join(PRIVATE_KEY_FILE), private_key.as_bytes())?;
         write_new_file(&target.join(PUBLIC_KEY_FILE), public_key.as_bytes())?;
         write_new_file(&target.join(METADATA_FILE), &metadata)?;
@@ -132,7 +156,9 @@ fn create_identity_at(
             name,
             created_at,
             public_key,
+            public_key_hex,
             private_key: private_key.to_string(),
+            private_key_hex,
         })
     })();
 
@@ -152,7 +178,8 @@ fn read_summary(target: &Path) -> Result<IdentitySummary, String> {
 fn list_identities_at(root: &Path) -> Result<Vec<IdentitySummary>, String> {
     ensure_root(root)?;
     let mut identities = Vec::new();
-    for entry in fs::read_dir(root).map_err(|error| format!("无法读取身份列表：{error}"))? {
+    for entry in fs::read_dir(root).map_err(|error| format!("无法读取身份列表：{error}"))?
+    {
         let entry = entry.map_err(|error| format!("无法读取身份列表：{error}"))?;
         if entry
             .file_type()
@@ -179,12 +206,16 @@ fn read_identity_at(root: &Path, id: &str) -> Result<IdentityDetail, String> {
         .map_err(|error| format!("无法读取公钥：{error}"))?;
     let private_key = fs::read_to_string(target.join(PRIVATE_KEY_FILE))
         .map_err(|error| format!("无法读取私钥：{error}"))?;
+    let public_key_hex = decode_key_hex("npub", &public_key)?;
+    let private_key_hex = decode_key_hex("nsec", &private_key)?;
     Ok(IdentityDetail {
         id: summary.id,
         name: summary.name,
         created_at: summary.created_at,
         public_key,
+        public_key_hex,
         private_key,
+        private_key_hex,
     })
 }
 
@@ -196,8 +227,8 @@ fn rename_identity_at(root: &Path, id: &str, name: &str) -> Result<IdentitySumma
         return Err("身份记录已损坏。".to_string());
     }
     summary.name = validate_name(name)?;
-    let metadata = serde_json::to_vec(&summary)
-        .map_err(|error| format!("无法保存身份信息：{error}"))?;
+    let metadata =
+        serde_json::to_vec(&summary).map_err(|error| format!("无法保存身份信息：{error}"))?;
     fs::write(target.join(METADATA_FILE), metadata)
         .map_err(|error| format!("无法保存身份名称：{error}"))?;
     Ok(summary)
@@ -278,8 +309,8 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("buzz-identity-test-{unique}"));
 
-        let first = create_identity_at(&root, "测试账号".to_string(), "1001".to_string(), 1001)
-            .unwrap();
+        let first =
+            create_identity_at(&root, "测试账号".to_string(), "1001".to_string(), 1001).unwrap();
         let second = create_identity_at(
             &root,
             "2026-09-14 18:00:00".to_string(),
@@ -289,11 +320,23 @@ mod tests {
         .unwrap();
         assert!(first.public_key.starts_with("npub1"));
         assert!(first.private_key.starts_with("nsec1"));
+        let first_json = serde_json::to_value(&first).unwrap();
+        for field in ["publicKeyHex", "privateKeyHex"] {
+            let value = first_json[field].as_str().expect("hex key must be present");
+            assert_eq!(value.len(), 64);
+            assert!(value
+                .bytes()
+                .all(|character| character.is_ascii_digit() || (b'a'..=b'f').contains(&character)));
+        }
         assert_eq!(list_identities_at(&root).unwrap()[0].id, second.id);
 
         let renamed = rename_identity_at(&root, &first.id, "同事 A").unwrap();
         assert_eq!(renamed.name, "同事 A");
-        assert_eq!(read_identity_at(&root, &first.id).unwrap().name, "同事 A");
+        let loaded = read_identity_at(&root, &first.id).unwrap();
+        assert_eq!(loaded.name, "同事 A");
+        let loaded_json = serde_json::to_value(loaded).unwrap();
+        assert_eq!(loaded_json["publicKeyHex"], first_json["publicKeyHex"]);
+        assert_eq!(loaded_json["privateKeyHex"], first_json["privateKeyHex"]);
 
         #[cfg(unix)]
         assert_eq!(
