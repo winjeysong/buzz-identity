@@ -3,6 +3,7 @@
 /.pnpm-store
 /.playwright-cli
 /src-tauri/target
+/src-tauri/fork-core/target
 /src-tauri/icons/android
 /src-tauri/icons/ios
 /src-tauri/icons/Square*Logo.png

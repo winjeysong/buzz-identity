@@ -1,0 +1,67 @@
+{
+  "_config_version": 42,
+  "group_sessions_per_user": true,
+  "thread_sessions_per_user": true,
+  "platform_toolsets": {
+    "buzz": ["fork_knowledge_readonly", "no_mcp"]
+  },
+  "known_plugin_toolsets": {
+    "buzz": ["fork_knowledge_readonly"]
+  },
+  "model": {
+    "provider": "deepseek",
+    "default": "deepseek-flash",
+    "base_url": "https://api.deepseek.com/v1"
+  },
+  "agent": {
+    "disabled_toolsets": [
+      "browser",
+      "code_execution",
+      "computer_use",
+      "connections",
+      "cronjob",
+      "debugging",
+      "delegation",
+      "file",
+      "hermes-acp",
+      "hermes-api-server",
+      "hermes-cli",
+      "hermes-gateway",
+      "kanban",
+      "memory",
+      "safe",
+      "search",
+      "session_search",
+      "skills",
+      "terminal",
+      "web"
+    ]
+  },
+  "plugins": {
+    "enabled": ["fork-knowledge"],
+    "disabled": [],
+    "scan_on_install": true
+  },
+  "gateway": {
+    "platforms": {
+      "buzz": {
+        "enabled": true,
+        "extra": {
+          "allow_admin_from": ["0000000000000000000000000000000000000000000000000000000000000000"],
+          "group_allow_admin_from": ["0000000000000000000000000000000000000000000000000000000000000000"],
+          "user_allowed_commands": [],
+          "group_user_allowed_commands": []
+        }
+      }
+    }
+  },
+  "mcp_servers": {},
+  "memory": {
+    "memory_enabled": false,
+    "user_profile_enabled": false,
+    "write_approval": true
+  },
+  "skills": {
+    "write_approval": true
+  }
+}

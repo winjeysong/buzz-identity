@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use zeroize::Zeroizing;
 
+mod fork_cmd;
+
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
@@ -25,14 +27,14 @@ struct IdentitySummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct IdentityDetail {
+pub(crate) struct IdentityDetail {
     id: String,
     name: String,
     created_at: u64,
     public_key: String,
     public_key_hex: String,
     private_key: String,
-    private_key_hex: String,
+    pub(crate) private_key_hex: String,
 }
 
 fn encode_key(prefix: &str, bytes: &[u8]) -> String {
@@ -77,14 +79,14 @@ fn validate_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn identities_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn identities_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("identities"))
         .map_err(|error| format!("无法获取应用数据目录：{error}"))
 }
 
-fn ensure_root(root: &Path) -> Result<(), String> {
+pub(crate) fn ensure_root(root: &Path) -> Result<(), String> {
     fs::create_dir_all(root).map_err(|error| format!("无法创建应用数据目录：{error}"))?;
     #[cfg(unix)]
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))
@@ -195,7 +197,7 @@ fn list_identities_at(root: &Path) -> Result<Vec<IdentitySummary>, String> {
     Ok(identities)
 }
 
-fn read_identity_at(root: &Path, id: &str) -> Result<IdentityDetail, String> {
+pub(crate) fn read_identity_at(root: &Path, id: &str) -> Result<IdentityDetail, String> {
     validate_id(id)?;
     let target = root.join(id);
     let summary = read_summary(&target)?;
@@ -277,7 +279,18 @@ pub fn run() {
             generate_identity,
             get_identity,
             rename_identity,
-            delete_identity
+            delete_identity,
+            fork_cmd::list_forks,
+            fork_cmd::create_fork,
+            fork_cmd::get_fork,
+            fork_cmd::delete_fork,
+            fork_cmd::set_fork_model_key,
+            fork_cmd::build_fork_snapshot,
+            fork_cmd::docker_probe,
+            fork_cmd::start_fork,
+            fork_cmd::stop_fork,
+            fork_cmd::fork_status,
+            fork_cmd::fork_logs
         ])
         .run(tauri::generate_context!())
         .expect("error while running Buzz Identity");
