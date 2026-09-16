@@ -253,6 +253,21 @@ pub fn fork_status(app: AppHandle, id: String) -> Result<docker::ContainerStatus
 }
 
 #[tauri::command]
+pub fn fork_connection_state(app: AppHandle, id: String) -> Result<docker::ConnectionState, String> {
+    let root = forks_root(&app)?;
+    store::read_fork_at(&root, &id)?;
+    Ok(docker::connection_state(&container_name(&id)))
+}
+
+#[tauri::command]
+pub fn fork_identity_public_key(app: AppHandle, id: String) -> Result<String, String> {
+    let root = forks_root(&app)?;
+    let config = store::read_fork_at(&root, &id)?;
+    let identities = identities_root(&app)?;
+    Ok(read_identity_at(&identities, &config.identity_id)?.public_key_hex)
+}
+
+#[tauri::command]
 pub fn fork_logs(app: AppHandle, id: String, tail: usize) -> Result<String, String> {
     let root = forks_root(&app)?;
     store::read_fork_at(&root, &id)?;

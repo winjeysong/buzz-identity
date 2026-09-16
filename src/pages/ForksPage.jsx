@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import {
   AlertCircle,
   Bot,
+  Check,
+  CircleCheck,
+  CircleDot,
+  Copy,
   FolderOpen,
   GitBranch,
   LoaderCircle,
@@ -9,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   ScrollText,
+  ShieldAlert,
   Square,
   Trash2,
   X,
@@ -495,6 +500,43 @@ export default function ForksPage() {
 
 function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDelete }) {
   const label = STATE_LABELS[fork.state] ?? STATE_LABELS.draft;
+  const [connection, setConnection] = useState(null);
+  const [publicKey, setPublicKey] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function refresh() {
+    if (!invoke) return;
+    try {
+      const [state, key] = await Promise.all([
+        invoke("fork_connection_state", { id: fork.id }),
+        invoke("fork_identity_public_key", { id: fork.id }),
+      ]);
+      setConnection(state);
+      setPublicKey(key);
+    } catch {
+      setConnection(null);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, [fork.id, fork.state]);
+
+  async function copyPublicKey() {
+    try {
+      await navigator.clipboard.writeText(publicKey);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  const membershipBlocked =
+    connection?.needsAttention ||
+    (connection?.errorCode ?? "").includes("membership") ||
+    (connection?.errorMessage ?? "").includes("membership_required");
+
   return (
     <div className="mx-auto w-full max-w-[920px] px-[clamp(28px,5vw,72px)] py-[clamp(32px,5vh,56px)]">
       <div className="mb-8 flex items-start justify-between gap-6">
@@ -532,11 +574,69 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
         </Button>
       </div>
 
+      <section className="mt-6 rounded-2xl border bg-card p-5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">Buzz 连接</span>
+          {connection ? <ConnectionBadge state={connection.state} /> : null}
+          <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" onClick={refresh}>
+            <RefreshCw className="size-3.5" /> 刷新
+          </Button>
+        </div>
+
+        {membershipBlocked ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-700" />
+              <div className="min-w-0 flex-1 space-y-2 text-sm leading-6 text-amber-900">
+                <p className="font-medium">该身份还不是 Relay 工作区成员，无法接收消息。</p>
+                <p className="text-xs">
+                  请把下面的公钥发给 Buzz 管理员，在 Relay 工作区中把它添加为成员，然后重新启动分身。
+                </p>
+                {publicKey ? (
+                  <div className="flex items-center gap-2">
+                    <code className="block min-w-0 flex-1 select-text break-all rounded-lg bg-white/80 px-3 py-2 font-mono text-[11px] leading-5">
+                      {publicKey}
+                    </code>
+                    <Button size="sm" variant="outline" className="shrink-0 bg-white" onClick={copyPublicKey}>
+                      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                      {copied ? "已复制" : "复制"}
+                    </Button>
+                  </div>
+                ) : null}
+                {connection?.errorMessage ? (
+                  <p className="break-all text-[11px] text-amber-700/80">{connection.errorMessage}</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : connection?.errorMessage ? (
+          <p className="mt-3 break-all text-xs text-muted-foreground">{connection.errorMessage}</p>
+        ) : null}
+      </section>
+
       {logs ? (
         <pre className="mt-6 max-h-[420px] overflow-auto rounded-2xl border bg-muted/40 p-4 text-xs leading-5">
           {logs}
         </pre>
       ) : null}
     </div>
+  );
+}
+
+function ConnectionBadge({ state }) {
+  const map = {
+    connected: { text: "已连接", tone: "bg-emerald-50 text-emerald-700", icon: CircleCheck },
+    connecting: { text: "连接中", tone: "bg-sky-50 text-sky-700", icon: LoaderCircle },
+    starting: { text: "启动中", tone: "bg-sky-50 text-sky-700", icon: LoaderCircle },
+    not_running: { text: "未运行", tone: "bg-muted text-muted-foreground", icon: CircleDot },
+    error: { text: "连接异常", tone: "bg-red-50 text-red-700", icon: AlertCircle },
+  };
+  const entry = map[state] ?? { text: state, tone: "bg-muted text-muted-foreground", icon: CircleDot };
+  const Icon = entry.icon;
+  return (
+    <span className={cn("flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium", entry.tone)}>
+      <Icon className={cn("size-3", state === "connecting" || state === "starting" ? "animate-spin" : "")} />
+      {entry.text}
+    </span>
   );
 }

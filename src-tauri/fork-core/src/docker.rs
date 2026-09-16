@@ -146,6 +146,45 @@ pub fn status(container_name: &str) -> Result<ContainerStatus, String> {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionState {
+    pub state: String,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub needs_attention: bool,
+}
+
+pub fn connection_state(container_name: &str) -> ConnectionState {
+    let idle = |state: &str| ConnectionState {
+        state: state.to_string(),
+        error_code: None,
+        error_message: None,
+        needs_attention: false,
+    };
+    let output = match run_docker(&[
+        "exec",
+        container_name,
+        "cat",
+        "/opt/data/profiles/fork/gateway_state.json",
+    ]) {
+        Ok(output) => output,
+        Err(_) => return idle("not_running"),
+    };
+    let payload: serde_json::Value = match serde_json::from_str(&output) {
+        Ok(value) => value,
+        Err(_) => return idle("starting"),
+    };
+    let buzz = &payload["platforms"]["buzz"];
+    let state = buzz["state"].as_str().unwrap_or("starting").to_string();
+    ConnectionState {
+        state,
+        error_code: buzz["error_code"].as_str().map(|value| value.to_string()),
+        error_message: buzz["error_message"].as_str().map(|value| value.to_string()),
+        needs_attention: buzz["needs_attention"].as_bool().unwrap_or(false),
+    }
+}
+
 pub fn logs(container_name: &str, tail: usize) -> Result<String, String> {
     run_docker(&["logs", "--tail", &tail.to_string(), container_name])
 }

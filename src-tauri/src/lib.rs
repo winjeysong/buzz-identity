@@ -32,7 +32,7 @@ pub(crate) struct IdentityDetail {
     name: String,
     created_at: u64,
     public_key: String,
-    public_key_hex: String,
+    pub(crate) public_key_hex: String,
     private_key: String,
     pub(crate) private_key_hex: String,
 }
@@ -290,7 +290,9 @@ pub fn run() {
             fork_cmd::start_fork,
             fork_cmd::stop_fork,
             fork_cmd::fork_status,
-            fork_cmd::fork_logs
+            fork_cmd::fork_logs,
+            fork_cmd::fork_connection_state,
+            fork_cmd::fork_identity_public_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running Buzz Identity");
