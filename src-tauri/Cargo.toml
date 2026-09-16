@@ -1,3 +1,6 @@
+[workspace]
+members = ["fork-core"]
+
 [package]
 name = "buzz-identity"
 version = "0.1.3"
