@@ -1,12 +1,12 @@
 # 分身生成器技术方案
 
-> 状态：草案，待审阅
+> 状态：M1 已实现；M2/M3 待实施（保留原始方案供后续参考）
 > 日期：2026-09-16
 > 基线：`buzz-identity@07708c5`；架构师分身资产见 Artpal 仓库 `产品文档及计划/artpal-architect-knowledge/`
 
 ## 1. 背景与目标
 
-`buzz-identity` 当前是身份凭据生成器（Tauri 2 + React 19，约 850 行）：本机生成并管理 Buzz/Nostr 身份，支持 NIP-19 与 Hex 展示、重命名和删除。
+立项时，`buzz-identity` 是身份凭据生成器（Tauri 2 + React 19）：本机生成并管理 Buzz/Nostr 身份，支持 NIP-19 与 Hex 展示、重命名和删除。
 
 目标是把客户端升级为"分身工坊"：从**身份凭证生成 → 分身生成 → 分身运行 → 分身事实更新**的完整体验，让同事无需接触 Docker Compose、快照发布器和 Hermes 配置，几步操作即可拥有一个接入 Buzz、可被同事 @ 的专属分身。
 
@@ -88,13 +88,13 @@ Artpal 仓库已有一套经过生产验证的架构师分身实现（`产品文
 
 ### 4.3 容器与运行（本机 Docker）
 
-- **Docker 访问**：客户端调用 `docker` CLI（`docker compose` v2），先做 `docker info` 探测并在设置页给出安装/启动引导。不直接操作 Docker socket（避免 macOS/Windows 权限差异）。
+- **Docker 访问**：客户端调用 `docker` CLI，先做 `docker info` 探测并在设置页给出安装/启动引导。不直接操作 Docker socket（避免 macOS/Windows 权限差异）。
 - **通用镜像** `buzz-fork-hermes:<version>`：由本仓库 `runtime/`（新增）维护 Dockerfile，CI 构建推送 ACR；与架构师分身镜像同构（Hermes 基础镜像 + Buzz CLI + 通用知识插件 + 控制目录）。
 - **每个分身的运行参数**由客户端生成，等价于架构师分身的 compose 安全基线：
   - 只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、`pids_limit`
   - 仅挂载：分身状态卷（`/opt/data`）、快照（`/knowledge:ro`）、受保护索引（只读 secret）
-  - 环境注入：`BUZZ_PRIVATE_KEY`、`BUZZ_AUTH_TAG`（可选）、`BUZZ_RELAY_URL`、模型 Key
-  - `BUZZ_AUTH_TAG` 等 JSON 值由客户端直接传给 Docker API 参数，不经过 shell（规避架构师分身部署时踩过的引号陷阱）
+  - `BUZZ_RELAY_URL` 等非敏感配置经环境变量传入；身份私钥与模型 Key 通过启动时临时只读文件挂载，入口脚本读入后清理宿主机文件
+  - 停止后再次启动重建容器并保留状态卷；不启用 Docker 自动重启，避免重启时缺少已清理的临时凭据
 - **SOUL/SKILL 装载**：沿用"镜像控制目录 + 入口脚本安装到 profile"模式；分身差异部分由挂载只读文件传入，不重建镜像。
 
 ### 4.4 Buzz 接入流程
@@ -150,7 +150,7 @@ Artpal 仓库已有一套经过生产验证的架构师分身实现（`产品文
 ## 7. 风险与开放问题
 
 - **Docker Desktop 依赖**：同事需自行安装 Docker Desktop（Windows/macOS）；安装引导质量直接影响上手成功率。
-- **镜像分发**：ACR 拉取需要同事网络可达；若不可达需提供离线导入包。ACR 地址待补充（用户稍后提供；开发期使用本地构建镜像 `buzz-fork-hermes:dev`）。
+- **镜像分发**：正式发布包在 CI 构建时使用 `ACR_NAMESPACE` 注入 ACR 镜像地址；本地开发默认使用 `buzz-fork-hermes:dev`。ACR 拉取需要同事网络可达，私有仓库需先执行 `docker login`；若不可达需提供离线导入包。
 - **模型凭据费用**：每个分身自带模型 Key（已确认，2026-09-16），不由团队共享额度。
 - **Relay 成员授权**：新分身身份需要 Relay 管理员授权，无法完全自助；客户端只能做好引导。
 - **Windows 卷路径与换行符**：快照文件哈希对 EOL 敏感，构建器需明确以字节为准并在文档说明。

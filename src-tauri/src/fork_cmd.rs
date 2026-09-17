@@ -9,7 +9,10 @@ use tauri::{AppHandle, Manager};
 const SOUL_TEMPLATE: &str = include_str!("../../runtime/templates/SOUL.md");
 const SKILL_TEMPLATE: &str = include_str!("../../runtime/templates/SKILL.md");
 const DEFAULT_DOMAIN: &str = "你团队的产品、技术、架构、数据和流程问题";
-const DEFAULT_IMAGE: &str = "buzz-fork-hermes:dev";
+const DEFAULT_IMAGE: &str = match option_env!("BUZZ_FORK_IMAGE") {
+    Some(image) => image,
+    None => "buzz-fork-hermes:dev",
+};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,13 +218,12 @@ pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
 
     let env = vec![
         ("BUZZ_RELAY_URL".to_string(), config.buzz.relay_url.clone()),
-        ("BUZZ_PRIVATE_KEY".to_string(), identity.private_key_hex.clone()),
         ("BUZZ_HOME_CHANNEL".to_string(), config.buzz.home_channel.clone()),
         ("BUZZ_ALLOW_ALL_USERS".to_string(), "true".to_string()),
         ("BUZZ_REQUIRE_MENTION".to_string(), "true".to_string()),
         ("BUZZ_TRANSPORT".to_string(), "websocket".to_string()),
         ("BUZZ_CLI_PATH".to_string(), "/usr/local/bin/buzz".to_string()),
-        (provider_env_name(&config.model.provider).to_string(), model_key),
+        ("MODEL_KEY_ENV".to_string(), provider_env_name(&config.model.provider).to_string()),
         ("HERMES_MODEL".to_string(), config.model.model.clone()),
     ];
 
@@ -233,6 +235,9 @@ pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
         index_path,
         state_volume,
         env,
+        secret_parent: fork_dir,
+        buzz_private_key: identity.private_key_hex,
+        model_key,
         command: vec!["gateway".to_string(), "run".to_string()],
     };
     docker::run(&spec)

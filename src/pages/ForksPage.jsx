@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle,
   Bot,
@@ -6,11 +7,13 @@ import {
   CircleCheck,
   CircleDot,
   Copy,
+  Cpu,
   FolderOpen,
   GitBranch,
   LoaderCircle,
   Play,
   Plus,
+  Radio,
   RefreshCw,
   ScrollText,
   ShieldAlert,
@@ -28,17 +31,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
 const STATE_LABELS = {
   draft: { text: "草稿", tone: "bg-muted text-muted-foreground" },
-  ready: { text: "就绪", tone: "bg-sky-50 text-sky-700" },
-  running: { text: "运行中", tone: "bg-emerald-50 text-emerald-700" },
-  stopped: { text: "已停止", tone: "bg-amber-50 text-amber-700" },
+  ready: { text: "就绪", tone: "bg-secondary text-secondary-foreground" },
+  running: { text: "运行中", tone: "bg-primary/10 text-primary dark:text-sidebar-primary" },
+  stopped: { text: "已停止", tone: "bg-muted text-muted-foreground" },
 };
 
 function formatCreated(timestamp) {
@@ -60,38 +66,52 @@ function emptyFolderSource() {
   return { type: "folder", label: "", path: "", include: [] };
 }
 
-function SourceEditor({ source, onChange, onRemove }) {
-  const input = (key, placeholder, className) => (
-    <Input
-      value={source[key] ?? ""}
-      onChange={(event) => onChange({ ...source, [key]: event.target.value })}
-      placeholder={placeholder}
-      className={cn("h-9", className)}
-    />
+function SourceEditor({ source, onChange, onRemove, onBrowse }) {
+  const pathKey = source.type === "git" ? "repoPath" : "path";
+  const pathLabel = source.type === "git" ? "Git 仓库目录" : "本地目录";
+  const pathButton = (
+    <Button
+      type="button"
+      variant="outline"
+      className="h-9 w-full min-w-0 justify-between px-3 font-normal"
+      onClick={onBrowse}
+      aria-label={`选择${pathLabel}`}
+      title={source[pathKey] || `选择${pathLabel}`}
+    >
+      <span className={cn("min-w-0 flex-1 truncate text-left", !source[pathKey] && "text-muted-foreground")}>
+        {source[pathKey] || `选择${pathLabel}`}
+      </span>
+      <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+    </Button>
   );
   return (
     <div className="rounded-xl border bg-muted/30 p-3">
       <div className="mb-2 flex items-center gap-2">
-        <span className="grid size-7 place-items-center rounded-lg bg-white text-muted-foreground shadow-sm">
+        <span className="grid size-7 place-items-center rounded-lg bg-card text-muted-foreground shadow-sm">
           {source.type === "git" ? <GitBranch className="size-3.5" /> : <FolderOpen className="size-3.5" />}
         </span>
         <Input
           value={source.label}
           onChange={(event) => onChange({ ...source, label: event.target.value })}
           placeholder="来源名称（引用中显示）"
-          className="h-8 flex-1 bg-white"
+          className="h-8 flex-1 bg-card"
         />
-        <Button size="icon" variant="ghost" className="size-8" onClick={onRemove} aria-label="移除来源">
+        <Button type="button" size="icon" variant="ghost" className="size-8" onClick={onRemove} aria-label="移除来源">
           <X className="size-3.5" />
         </Button>
       </div>
       {source.type === "git" ? (
-        <div className="grid grid-cols-[1fr_150px] gap-2">
-          {input("repoPath", "Git 仓库绝对路径")}
-          {input("commit", "分支或 commit（默认 HEAD）")}
+        <div className="grid grid-cols-[minmax(0,1fr)_150px] gap-2">
+          {pathButton}
+          <Input
+            value={source.commit ?? ""}
+            onChange={(event) => onChange({ ...source, commit: event.target.value })}
+            placeholder="分支或 commit（默认 HEAD）"
+            className="h-9"
+          />
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-2">{input("path", "目录绝对路径")}</div>
+        pathButton
       )}
     </div>
   );
@@ -153,6 +173,29 @@ export default function ForksPage() {
     });
   }
 
+  async function chooseSourceDirectory(index, type) {
+    try {
+      const path = await open({
+        directory: true,
+        multiple: false,
+        title: type === "git" ? "选择 Git 仓库目录" : "选择本地目录",
+      });
+      if (typeof path !== "string") return;
+      setDraft((current) => {
+        if (!current?.knowledgeSources[index] || current.knowledgeSources[index].type !== type) return current;
+        const knowledgeSources = [...current.knowledgeSources];
+        knowledgeSources[index] = {
+          ...knowledgeSources[index],
+          [type === "git" ? "repoPath" : "path"]: path,
+        };
+        return { ...current, knowledgeSources };
+      });
+      setError("");
+    } catch (reason) {
+      setError(`无法选择目录：${String(reason)}`);
+    }
+  }
+
   async function submitCreate(event) {
     event.preventDefault();
     if (!invoke || busy) return;
@@ -207,26 +250,37 @@ export default function ForksPage() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-[clamp(240px,24vw,300px)] shrink-0 flex-col border-r">
-        <div className="flex items-center justify-between px-5 pb-2 pt-5">
-          <span className="text-xs font-medium text-muted-foreground">我的分身</span>
-          <span className="text-xs tabular-nums text-muted-foreground">{forks.length}</span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+      <aside className="flex w-[clamp(260px,28vw,320px)] shrink-0 flex-col border-r bg-sidebar">
+        <header className="flex h-[76px] items-center gap-3 border-b px-5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold">我的分身</p>
+            <p className="text-xs tabular-nums text-muted-foreground">{forks.length} 个分身</p>
+          </div>
+          <Button
+            size="icon"
+            onClick={startCreate}
+            disabled={isBooting || identities.length === 0}
+            aria-label="创建分身"
+            title={identities.length === 0 ? "请先创建身份" : "创建分身"}
+          >
+            <Plus className="size-[18px]" />
+          </Button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
           {forks.length === 0 && !isBooting ? (
             <p className="px-2 py-8 text-center text-xs leading-5 text-muted-foreground">
               尚未创建分身
               <br />
-              点击右上角 + 开始
+              {identities.length === 0 ? "请先在身份 Tab 创建身份" : "点击右上角 + 开始"}
             </p>
           ) : null}
           <div className="space-y-1">
             {forks.map((fork) => {
               const label = STATE_LABELS[fork.state] ?? STATE_LABELS.draft;
               return (
-                <button
+                <Button
                   key={fork.id}
-                  type="button"
+                  variant="ghost"
                   onClick={() => {
                     setSelectedId(fork.id);
                     setCreating(false);
@@ -235,21 +289,21 @@ export default function ForksPage() {
                     setError("");
                   }}
                   className={cn(
-                    "block w-full rounded-xl px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    "block h-auto w-full rounded-xl px-3 py-2.5 text-left",
                     selectedId === fork.id ? "bg-sidebar-accent" : "hover:bg-muted/70",
                   )}
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="min-w-0 truncate text-sm font-medium">{fork.name}</span>
-                    <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium", label.tone)}>
+                    <Badge className={cn("shrink-0 border-0 px-2 text-[10px]", label.tone)}>
                       {label.text}
-                    </span>
+                    </Badge>
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                     {formatCreated(fork.createdAt)}
                     {fork.hasModelKey ? "" : " · 未设置模型 Key"}
                   </span>
-                </button>
+                </Button>
               );
             })}
           </div>
@@ -258,20 +312,20 @@ export default function ForksPage() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         {error ? (
-          <div className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-6 py-3 text-sm text-red-700">
+          <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-6 py-3 text-sm text-destructive">
             <AlertCircle className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{error}</span>
-            <button type="button" onClick={() => setError("")} aria-label="关闭错误提示">
+            <Button variant="ghost" size="icon" className="size-6" onClick={() => setError("")} aria-label="关闭错误提示">
               <X className="size-4" />
-            </button>
+            </Button>
           </div>
         ) : null}
         {notice ? (
-          <div className="flex items-center gap-2 border-b border-emerald-200 bg-emerald-50 px-6 py-3 text-sm text-emerald-700">
+          <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/10 px-6 py-3 text-sm text-foreground">
             <span className="min-w-0 flex-1 truncate">{notice}</span>
-            <button type="button" onClick={() => setNotice("")} aria-label="关闭提示">
+            <Button variant="ghost" size="icon" className="size-6" onClick={() => setNotice("")} aria-label="关闭提示">
               <X className="size-4" />
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -281,73 +335,106 @@ export default function ForksPage() {
               <LoaderCircle className="size-6 animate-spin" />
             </div>
           ) : creating && draft ? (
-            <form className="mx-auto w-full max-w-[760px] px-8 py-10" onSubmit={submitCreate}>
-              <h1 className="text-2xl font-semibold tracking-tight">创建分身</h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                分身使用你的身份连接 Buzz，知识来自你指定的 Git 仓库与本地目录。
-              </p>
+            <form
+              className="mx-auto w-full max-w-[920px] px-[clamp(28px,5vw,72px)] py-[clamp(32px,5vh,56px)]"
+              onSubmit={submitCreate}
+            >
+              <div className="mb-8 flex items-start justify-between gap-6">
+                <div className="min-w-0">
+                  <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-primary dark:text-sidebar-primary">分身</p>
+                  <h1 className="text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">创建分身</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    使用身份连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。
+                  </p>
+                </div>
+                <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                  <Bot className="size-5" />
+                </span>
+              </div>
 
-              <div className="mt-8 space-y-6">
-                <section className="space-y-3">
-                  <h2 className="text-sm font-semibold">基本信息</h2>
+              <div className="space-y-4">
+                <Card className="gap-0 rounded-2xl py-5">
+                  <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <Bot className="size-[18px]" />
+                    </span>
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">基本信息</CardTitle>
+                      <CardDescription className="text-xs">为分身命名并选择它使用的身份</CardDescription>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="px-5">
                   <div className="grid grid-cols-2 gap-3">
                     <Input
                       value={draft.name}
                       onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                       placeholder="分身名称（如：我的架构助手）"
                       maxLength={80}
+                      aria-label="分身名称"
                     />
-                    <select
+                    <Select
                       value={draft.identityId}
-                      onChange={(event) => setDraft({ ...draft, identityId: event.target.value })}
-                      className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      onValueChange={(identityId) => setDraft({ ...draft, identityId })}
                     >
-                      <option value="">选择身份…</option>
-                      {identities.map((identity) => (
-                        <option key={identity.id} value={identity.id}>
-                          {identity.name}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="w-full" aria-label="选择身份">
+                        <SelectValue placeholder="选择身份…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {identities.map((identity) => (
+                          <SelectItem key={identity.id} value={identity.id}>{identity.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <Input
+                    className="mt-3"
                     value={draft.domain}
                     onChange={(event) => setDraft({ ...draft, domain: event.target.value })}
                     placeholder="知识域描述（可选，如：Artpal 前端问题）"
+                    aria-label="知识域描述"
                   />
-                </section>
+                  </CardContent>
+                </Card>
 
-                <section className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-sm font-semibold">知识来源</h2>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setDraft({ ...draft, knowledgeSources: [...draft.knowledgeSources, emptyGitSource()] })
-                        }
-                      >
-                        <GitBranch className="size-3.5" /> Git 仓库
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setDraft({ ...draft, knowledgeSources: [...draft.knowledgeSources, emptyFolderSource()] })
-                        }
-                      >
-                        <FolderOpen className="size-3.5" /> 本地目录
-                      </Button>
+                <Card className="gap-0 rounded-2xl py-5">
+                  <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <GitBranch className="size-[18px]" />
+                    </span>
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">知识来源</CardTitle>
+                      <CardDescription className="text-xs">选择要引用的本机仓库或目录</CardDescription>
                     </div>
+                  </CardHeader>
+                  <CardContent className="px-5">
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setDraft({ ...draft, knowledgeSources: [...draft.knowledgeSources, emptyGitSource()] })
+                      }
+                    >
+                      <GitBranch className="size-3.5" /> Git 仓库
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setDraft({ ...draft, knowledgeSources: [...draft.knowledgeSources, emptyFolderSource()] })
+                      }
+                    >
+                      <FolderOpen className="size-3.5" /> 本地目录
+                    </Button>
                   </div>
                   <div className="space-y-2">
                     {draft.knowledgeSources.map((source, index) => (
                       <SourceEditor
                         key={index}
                         source={source}
+                        onBrowse={() => chooseSourceDirectory(index, source.type)}
                         onChange={(next) => {
                           const list = [...draft.knowledgeSources];
                           list[index] = next;
@@ -362,17 +449,28 @@ export default function ForksPage() {
                       />
                     ))}
                   </div>
-                </section>
+                  </CardContent>
+                </Card>
 
-                <section className="space-y-3">
-                  <h2 className="text-sm font-semibold">模型</h2>
-                  <div className="grid grid-cols-3 gap-3">
+                <Card className="gap-0 rounded-2xl py-5">
+                  <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <Cpu className="size-[18px]" />
+                    </span>
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">模型</CardTitle>
+                      <CardDescription className="text-xs">配置分身使用的模型与凭据</CardDescription>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="px-5">
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3">
                     <Input
                       value={draft.model.provider}
                       onChange={(event) =>
                         setDraft({ ...draft, model: { ...draft.model, provider: event.target.value } })
                       }
                       placeholder="Provider"
+                      aria-label="模型 Provider"
                     />
                     <Input
                       value={draft.model.model}
@@ -380,6 +478,7 @@ export default function ForksPage() {
                         setDraft({ ...draft, model: { ...draft.model, model: event.target.value } })
                       }
                       placeholder="模型 ID"
+                      aria-label="模型 ID"
                     />
                     <Input
                       value={draft.model.baseUrl ?? ""}
@@ -387,18 +486,31 @@ export default function ForksPage() {
                         setDraft({ ...draft, model: { ...draft.model, baseUrl: event.target.value } })
                       }
                       placeholder="Base URL（可选）"
+                      aria-label="模型 Base URL"
                     />
                   </div>
                   <Input
+                    className="mt-3"
                     type="password"
                     value={draft.modelKey}
                     onChange={(event) => setDraft({ ...draft, modelKey: event.target.value })}
                     placeholder="模型 API Key（保存在系统凭据存储）"
+                    aria-label="模型 API Key"
                   />
-                </section>
+                  </CardContent>
+                </Card>
 
-                <section className="space-y-3">
-                  <h2 className="text-sm font-semibold">Buzz</h2>
+                <Card className="gap-0 rounded-2xl py-5">
+                  <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <Radio className="size-[18px]" />
+                    </span>
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">Buzz 连接</CardTitle>
+                      <CardDescription className="text-xs">设置 Relay 与默认频道</CardDescription>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="px-5">
                   <div className="grid grid-cols-2 gap-3">
                     <Input
                       value={draft.buzz.relayUrl}
@@ -406,6 +518,7 @@ export default function ForksPage() {
                         setDraft({ ...draft, buzz: { ...draft.buzz, relayUrl: event.target.value } })
                       }
                       placeholder="Relay URL"
+                      aria-label="Buzz Relay URL"
                     />
                     <Input
                       value={draft.buzz.homeChannel}
@@ -413,9 +526,11 @@ export default function ForksPage() {
                         setDraft({ ...draft, buzz: { ...draft.buzz, homeChannel: event.target.value } })
                       }
                       placeholder="Home 频道 ID"
+                      aria-label="Buzz Home 频道 ID"
                     />
                   </div>
-                </section>
+                  </CardContent>
+                </Card>
 
                 <div className="flex items-center gap-3 pt-2">
                   <Button type="submit" disabled={busy === "create" || !draft.identityId}>
@@ -455,7 +570,7 @@ export default function ForksPage() {
           ) : (
             <div className="grid h-full min-h-[520px] place-items-center px-8">
               <section className="w-full max-w-[420px] text-center">
-                <span className="mx-auto grid size-20 place-items-center rounded-[22px] bg-emerald-50 text-emerald-700">
+                <span className="mx-auto grid size-20 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
                   <Bot className="size-9" />
                 </span>
                 <h1 className="mt-6 text-2xl font-semibold tracking-tight">创建你的分身</h1>
@@ -541,102 +656,150 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
     <div className="mx-auto w-full max-w-[920px] px-[clamp(28px,5vw,72px)] py-[clamp(32px,5vh,56px)]">
       <div className="mb-8 flex items-start justify-between gap-6">
         <div className="min-w-0">
-          <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-emerald-700">分身</p>
+          <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-primary dark:text-sidebar-primary">分身</p>
           <h1 className="truncate text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">{fork.name}</h1>
           <p className="mt-2 text-sm text-muted-foreground">创建于 {formatCreated(fork.createdAt)}</p>
         </div>
-        <span className={cn("rounded-full px-3 py-1 text-xs font-medium", label.tone)}>{label.text}</span>
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+          <Bot className="size-5" />
+        </span>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={onBuild} disabled={Boolean(busy)}>
-          {busy === "build" ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-          构建知识
-        </Button>
-        {fork.state === "running" ? (
-          <Button variant="outline" onClick={onStop} disabled={Boolean(busy)}>
-            {busy === "stop" ? <LoaderCircle className="size-4 animate-spin" /> : <Square className="size-4" />}
-            停止
-          </Button>
-        ) : (
-          <Button onClick={onStart} disabled={Boolean(busy) || fork.state === "draft"}>
-            {busy === "start" ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
-            启动
-          </Button>
-        )}
-        <Button variant="outline" onClick={onLogs} disabled={Boolean(busy)}>
-          {busy === "logs" ? <LoaderCircle className="size-4 animate-spin" /> : <ScrollText className="size-4" />}
-          查看日志
-        </Button>
-        <Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onDelete}>
-          <Trash2 className="size-4" />
-          删除
-        </Button>
-      </div>
+      <div className="space-y-4">
+        <Card className="gap-0 rounded-2xl py-5">
+          <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+              <Play className="size-[18px]" />
+            </span>
+            <div className="min-w-0 flex-1 space-y-1">
+              <CardTitle className="text-sm">运行与维护</CardTitle>
+              <CardDescription className="text-xs">构建知识快照后即可启动分身</CardDescription>
+            </div>
+            <CardAction className="shrink-0">
+              <Badge className={cn("border-0 text-[11px]", label.tone)}>{label.text}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="px-5">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={onBuild} disabled={Boolean(busy)}>
+              {busy === "build" ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              构建知识
+            </Button>
+            {fork.state === "running" ? (
+              <Button variant="outline" onClick={onStop} disabled={Boolean(busy)}>
+                {busy === "stop" ? <LoaderCircle className="size-4 animate-spin" /> : <Square className="size-4" />}
+                停止
+              </Button>
+            ) : (
+              <Button onClick={onStart} disabled={Boolean(busy) || fork.state === "draft"}>
+                {busy === "start" ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
+                启动
+              </Button>
+            )}
+            <Button variant="outline" onClick={onLogs} disabled={Boolean(busy)}>
+              {busy === "logs" ? <LoaderCircle className="size-4 animate-spin" /> : <ScrollText className="size-4" />}
+              查看日志
+            </Button>
+          </div>
+          <div className="mt-4 border-t pt-3">
+            <Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onDelete}>
+              <Trash2 className="size-4" />
+              删除分身
+            </Button>
+          </div>
+          </CardContent>
+        </Card>
 
-      <section className="mt-6 rounded-2xl border bg-card p-5 shadow-sm">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">Buzz 连接</span>
-          {connection ? <ConnectionBadge state={connection.state} /> : null}
-          <Button size="sm" variant="ghost" className="ml-auto h-7 px-2 text-xs" onClick={refresh}>
-            <RefreshCw className="size-3.5" /> 刷新
-          </Button>
-        </div>
+        <Card className="gap-0 rounded-2xl py-5">
+          <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+              <Radio className="size-[18px]" />
+            </span>
+            <div className="min-w-0 flex-1 space-y-1">
+              <CardTitle className="text-sm">Buzz 连接</CardTitle>
+              <CardDescription className="text-xs">查看分身与 Relay 的连接状态</CardDescription>
+            </div>
+            <CardAction className="shrink-0">
+              <Button size="sm" variant="ghost" className="px-2" onClick={refresh}>
+                <RefreshCw className="size-3.5" /> 刷新
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="px-5">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>连接状态</span>
+            {connection ? <ConnectionBadge state={connection.state} /> : <span>读取中…</span>}
+          </div>
 
-        {membershipBlocked ? (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-            <div className="flex items-start gap-2.5">
-              <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-700" />
-              <div className="min-w-0 flex-1 space-y-2 text-sm leading-6 text-amber-900">
-                <p className="font-medium">该身份还不是 Relay 工作区成员，无法接收消息。</p>
-                <p className="text-xs">
-                  请把下面的公钥发给 Buzz 管理员，在 Relay 工作区中把它添加为成员，然后重新启动分身。
-                </p>
-                {publicKey ? (
-                  <div className="flex items-center gap-2">
-                    <code className="block min-w-0 flex-1 select-text break-all rounded-lg bg-white/80 px-3 py-2 font-mono text-[11px] leading-5">
-                      {publicKey}
-                    </code>
-                    <Button size="sm" variant="outline" className="shrink-0 bg-white" onClick={copyPublicKey}>
-                      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                      {copied ? "已复制" : "复制"}
-                    </Button>
-                  </div>
-                ) : null}
-                {connection?.errorMessage ? (
-                  <p className="break-all text-[11px] text-amber-700/80">{connection.errorMessage}</p>
-                ) : null}
+          {membershipBlocked ? (
+            <div className="mt-4 rounded-xl border border-primary/20 bg-primary/10 p-4">
+              <div className="flex items-start gap-2.5">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0 text-primary dark:text-sidebar-primary" />
+                <div className="min-w-0 flex-1 space-y-2 text-sm leading-6 text-foreground">
+                  <p className="font-medium">该身份还不是 Relay 工作区成员，无法接收消息。</p>
+                  <p className="text-xs">
+                    请把下面的公钥发给 Buzz 管理员，在 Relay 工作区中把它添加为成员，然后重新启动分身。
+                  </p>
+                  {publicKey ? (
+                    <div className="flex items-center gap-2">
+                      <code className="block min-w-0 flex-1 select-text break-all rounded-lg bg-card/80 px-3 py-2 font-mono text-[11px] leading-5">
+                        {publicKey}
+                      </code>
+                      <Button size="sm" variant="outline" className="shrink-0 bg-card" onClick={copyPublicKey}>
+                        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                        {copied ? "已复制" : "复制"}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {connection?.errorMessage ? (
+                    <p className="break-all text-[11px] text-muted-foreground">{connection.errorMessage}</p>
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
-        ) : connection?.errorMessage ? (
-          <p className="mt-3 break-all text-xs text-muted-foreground">{connection.errorMessage}</p>
-        ) : null}
-      </section>
+          ) : connection?.errorMessage ? (
+            <p className="mt-3 break-all text-xs text-muted-foreground">{connection.errorMessage}</p>
+          ) : null}
+          </CardContent>
+        </Card>
 
-      {logs ? (
-        <pre className="mt-6 max-h-[420px] overflow-auto rounded-2xl border bg-muted/40 p-4 text-xs leading-5">
-          {logs}
-        </pre>
-      ) : null}
+        {logs ? (
+          <Card className="gap-0 rounded-2xl py-5">
+            <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                <ScrollText className="size-[18px]" />
+              </span>
+              <div className="space-y-1">
+                <CardTitle className="text-sm">运行日志</CardTitle>
+                <CardDescription className="text-xs">最近 200 行容器日志</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="px-5">
+              <pre className="max-h-[420px] overflow-auto rounded-xl bg-muted px-4 py-3 text-xs leading-5">
+                {logs}
+              </pre>
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 function ConnectionBadge({ state }) {
   const map = {
-    connected: { text: "已连接", tone: "bg-emerald-50 text-emerald-700", icon: CircleCheck },
-    connecting: { text: "连接中", tone: "bg-sky-50 text-sky-700", icon: LoaderCircle },
-    starting: { text: "启动中", tone: "bg-sky-50 text-sky-700", icon: LoaderCircle },
+    connected: { text: "已连接", tone: "bg-primary/10 text-primary dark:text-sidebar-primary", icon: CircleCheck },
+    connecting: { text: "连接中", tone: "bg-secondary text-secondary-foreground", icon: LoaderCircle },
+    starting: { text: "启动中", tone: "bg-secondary text-secondary-foreground", icon: LoaderCircle },
     not_running: { text: "未运行", tone: "bg-muted text-muted-foreground", icon: CircleDot },
-    error: { text: "连接异常", tone: "bg-red-50 text-red-700", icon: AlertCircle },
+    error: { text: "连接异常", tone: "bg-destructive/10 text-destructive", icon: AlertCircle },
   };
   const entry = map[state] ?? { text: state, tone: "bg-muted text-muted-foreground", icon: CircleDot };
   const Icon = entry.icon;
   return (
-    <span className={cn("flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium", entry.tone)}>
+    <Badge className={cn("border-0 px-2.5 text-[11px]", entry.tone)}>
       <Icon className={cn("size-3", state === "connecting" || state === "starting" ? "animate-spin" : "")} />
       {entry.text}
-    </span>
+    </Badge>
   );
 }

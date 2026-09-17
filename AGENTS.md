@@ -71,7 +71,7 @@ runtime/                       # 分身运行时容器资产（与客户端解�
 
 ### 安全基线不可放宽
 
-- 容器运行参数固定：只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、非 root（10000）、仅挂载状态卷 / 快照（只读）/ 受保护索引（只读）/ 挂载配置（只读）。
+- 容器运行参数固定：只读根文件系统、`cap_drop: ALL`、`no-new-privileges`、非 root（10000）、仅挂载状态卷 / 快照（只读）/ 受保护索引（只读）/ 挂载配置（只读）及启动时临时凭据文件（只读）。停止后再次启动会重建容器并保留状态卷；不启用 Docker 自动重启。
 - `merge_config.py` **只接受 overlay 的 `model` 键**；plugins、工具集、记忆开关等完全由镜像内 `config.base.json` 控制。客户端无权通过配置文件扩大能力。
 - 知识插件 fail-closed：索引缺失/未登记路径/哈希不符/符号链接一律拒绝；新增文件类型进 `TEXT_SUFFIXES` 时同步审查。
 - 快照构建默认拒绝：`.env*`、密钥后缀（`.key/.pem/.p12/.pfx`）、`node_modules/`、`target/` 等；命中私钥块、`nsec1`、`sk-`、`AKIA` 模式直接拒绝构建。
@@ -84,11 +84,11 @@ runtime/                       # 分身运行时容器资产（与客户端解�
 
 - 身份私钥保存在应用数据目录（`identities/`，0600）。
 - 模型 API Key 保存在 **OS keyring**（service `buzz-identity-fork`，账号 `<fork-id>:model`），不写入 JSON 或仓库。
-- 启动分身时私钥/API Key 经环境变量注入容器（会出现在本机 `docker inspect`，与既有架构师分身方案一致）。
+- 启动分身时私钥/API Key 通过临时只读文件挂载，运行时读取后客户端删除宿主机临时文件；不得通过 `docker run -e KEY=value` 传递秘密。Docker 管理员仍可访问运行中的容器。
 
 ## CI 发布
 
-- `.github/workflows/build.yml`：推送 main 后构建三平台桌面安装包（macOS arm64/x64、Windows）。发版前更新 `src-tauri/tauri.conf.json` 的 `version`。
+- `.github/workflows/build.yml`：推送 main 后构建三平台桌面安装包（macOS arm64/x64、Windows），使用 `ACR_NAMESPACE` 注入正式运行时镜像。发版前同步更新三个版本号。
 - `.github/workflows/runtime-image.yml`：`runtime/**` 变更时构建并推送 `buzz-fork-hermes` 镜像到 ACR。需要 secrets：`ACR_USERNAME`、`ACR_PASSWORD`、`ACR_NAMESPACE`。
 
 ## 注意事项

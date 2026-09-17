@@ -13,6 +13,9 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}
+    env:
+      ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+      BUZZ_FORK_IMAGE: crpi-fz0dnre7t4yztz62.cn-shanghai.personal.cr.aliyuncs.com/${{ secrets.ACR_NAMESPACE }}/buzz-fork-hermes:latest
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +31,10 @@ jobs:
             args: --bundles nsis
 
     steps:
+      - name: 检查运行时镜像配置
+        shell: bash
+        run: test -n "$ACR_NAMESPACE"
+
       - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
@@ -50,8 +57,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: 测试密钥生成逻辑
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: 测试 Rust 工作区
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace
 
       - name: 构建安装包
         uses: tauri-apps/tauri-action@v1

@@ -38,11 +38,11 @@ export default function SettingsPage() {
               {checking ? (
                 <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
               ) : docker?.available ? (
-                <span className="flex items-center gap-1 text-xs font-medium text-emerald-700">
+                <span className="flex items-center gap-1 text-xs font-medium text-primary dark:text-sidebar-primary">
                   <CheckCircle2 className="size-3.5" /> 可用
                 </span>
               ) : (
-                <span className="flex items-center gap-1 text-xs font-medium text-amber-700">
+                <span className="flex items-center gap-1 text-xs font-medium text-destructive">
                   <XCircle className="size-3.5" /> 不可用
                 </span>
               )}

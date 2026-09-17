@@ -1,6 +1,15 @@
 use serde::Serialize;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +35,18 @@ pub struct RunSpec {
     pub index_path: PathBuf,
     pub state_volume: String,
     pub env: Vec<(String, String)>,
+    pub secret_parent: PathBuf,
+    pub buzz_private_key: String,
+    pub model_key: String,
     pub command: Vec<String>,
+}
+
+struct SecretDir(PathBuf);
+
+impl Drop for SecretDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 pub fn probe() -> DockerStatus {
@@ -45,65 +65,139 @@ pub fn probe() -> DockerStatus {
 }
 
 pub fn run(spec: &RunSpec) -> Result<(), String> {
-    if container_exists(&spec.container_name)? {
-        Err("同名容器已存在，请先停止并删除。".into())
-    } else {
-        let mut args: Vec<String> = vec![
-            "run".into(),
-            "-d".into(),
-            "--name".into(),
-            spec.container_name.clone(),
-            "--restart".into(),
-            "unless-stopped".into(),
-            "--read-only".into(),
-            "--cap-drop".into(),
-            "ALL".into(),
-            "--security-opt".into(),
-            "no-new-privileges:true".into(),
-            "--pids-limit".into(),
-            "256".into(),
-            "--user".into(),
-            "10000:10000".into(),
-            "--entrypoint".into(),
-            "/opt/fork/entrypoint.sh".into(),
-            "--mount".into(),
-            format!("type=volume,src={},dst=/opt/data", spec.state_volume),
-            "--mount".into(),
-            format!(
-                "type=bind,src={},dst=/knowledge,readonly",
-                spec.snapshot_dir.display()
-            ),
-            "--mount".into(),
-            format!(
-                "type=bind,src={},dst=/run/secrets/fork-public-index,readonly",
-                spec.index_path.display()
-            ),
-            "--mount".into(),
-            format!(
-                "type=bind,src={},dst=/fork-config,readonly",
-                spec.fork_config_dir.display()
-            ),
-            "--tmpfs".into(),
-            "/run:rw,nosuid,nodev,size=16m".into(),
-            "--tmpfs".into(),
-            "/tmp:rw,nosuid,nodev,noexec,size=128m".into(),
-            "-e".into(),
-            "HERMES_HOME=/opt/data".into(),
-            "-e".into(),
-            "HOME=/opt/data".into(),
-            "-e".into(),
-            "HERMES_ENABLE_PROJECT_PLUGINS=false".into(),
-            "-e".into(),
-            "FORK_KNOWLEDGE_INDEX=/run/secrets/fork-public-index".into(),
-        ];
-        for (key, value) in &spec.env {
-            args.push("-e".into());
-            args.push(format!("{}={}", key, value));
-        }
-        args.push(spec.image.clone());
-        args.extend(spec.command.iter().cloned());
-        run_docker_owned(&args).map(|_| ())
+    let current = status(&spec.container_name)?;
+    if current.running {
+        return Err("分身已在运行。".into());
     }
+    if current.exists {
+        run_docker(&["rm", &spec.container_name])?;
+    }
+
+    let secrets = prepare_secrets(spec)?;
+    let args = run_args(spec, &secrets.0);
+    run_docker_owned(&args)?;
+    for _ in 0..50 {
+        if run_docker(&[
+            "exec",
+            &spec.container_name,
+            "test",
+            "-f",
+            "/run/fork-secrets-ready",
+        ])
+        .is_ok()
+        {
+            return Ok(());
+        }
+        if !status(&spec.container_name)
+            .map(|state| state.running)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let _ = stop(&spec.container_name);
+    Err("分身启动失败或超时，请查看容器日志。".into())
+}
+
+fn run_args(spec: &RunSpec, secret_dir: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        spec.container_name.clone(),
+        "--read-only".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges:true".into(),
+        "--pids-limit".into(),
+        "256".into(),
+        "--user".into(),
+        "10000:10000".into(),
+        "--entrypoint".into(),
+        "/opt/fork/entrypoint.sh".into(),
+        "--mount".into(),
+        format!("type=volume,src={},dst=/opt/data", spec.state_volume),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/knowledge,readonly",
+            spec.snapshot_dir.display()
+        ),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/run/secrets/fork-public-index,readonly",
+            spec.index_path.display()
+        ),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/fork-config,readonly",
+            spec.fork_config_dir.display()
+        ),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/opt/fork/secrets/buzz-private-key,readonly",
+            secret_dir.join("buzz-private-key").display()
+        ),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/opt/fork/secrets/model-key,readonly",
+            secret_dir.join("model-key").display()
+        ),
+        "--tmpfs".into(),
+        "/run:rw,nosuid,nodev,mode=1777,size=16m".into(),
+        "--tmpfs".into(),
+        "/tmp:rw,nosuid,nodev,noexec,size=128m".into(),
+        "-e".into(),
+        "HERMES_HOME=/opt/data".into(),
+        "-e".into(),
+        "HOME=/opt/data".into(),
+        "-e".into(),
+        "HERMES_ENABLE_PROJECT_PLUGINS=false".into(),
+        "-e".into(),
+        "FORK_KNOWLEDGE_INDEX=/run/secrets/fork-public-index".into(),
+    ];
+    for (key, value) in &spec.env {
+        args.push("-e".into());
+        args.push(format!("{}={}", key, value));
+    }
+    args.push(spec.image.clone());
+    args.extend(spec.command.iter().cloned());
+    args
+}
+
+fn prepare_secrets(spec: &RunSpec) -> Result<SecretDir, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let dir = spec
+        .secret_parent
+        .join(format!(".runtime-secrets-{}-{nonce}", std::process::id()));
+    fs::create_dir(&dir).map_err(|error| format!("无法创建临时凭据目录：{error}"))?;
+    let secrets = SecretDir(dir);
+    #[cfg(unix)]
+    fs::set_permissions(&secrets.0, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("无法保护临时凭据目录：{error}"))?;
+    write_secret(&secrets.0.join("buzz-private-key"), spec.buzz_private_key.as_bytes())?;
+    write_secret(&secrets.0.join("model-key"), spec.model_key.as_bytes())?;
+    Ok(secrets)
+}
+
+fn write_secret(path: &Path, value: &[u8]) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("无法创建临时凭据：{error}"))?;
+    file.write_all(value)
+        .map_err(|error| format!("无法写入临时凭据：{error}"))?;
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o444))
+        .map_err(|error| format!("无法设置临时凭据权限：{error}"))?;
+    Ok(())
 }
 
 pub fn stop(container_name: &str) -> Result<(), String> {
@@ -193,12 +287,8 @@ pub fn remove_volume(volume: &str) -> Result<(), String> {
     run_docker(&["volume", "rm", volume]).map(|_| ())
 }
 
-fn container_exists(container_name: &str) -> Result<bool, String> {
-    Ok(status(container_name)?.exists)
-}
-
 fn run_docker(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("docker")
+    let output = docker_command()
         .args(args)
         .output()
         .map_err(|error| format!("无法执行 docker，请确认已安装并启动 Docker Desktop：{}", error))?;
@@ -210,7 +300,7 @@ fn run_docker(args: &[&str]) -> Result<String, String> {
 }
 
 fn run_docker_owned(args: &[String]) -> Result<String, String> {
-    let output = Command::new("docker")
+    let output = docker_command()
         .args(args)
         .output()
         .map_err(|error| format!("无法执行 docker，请确认已安装并启动 Docker Desktop：{}", error))?;
@@ -219,4 +309,70 @@ fn run_docker_owned(args: &[String]) -> Result<String, String> {
         return Err(message);
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn docker_command() -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("docker");
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("docker")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn docker_args_mount_secrets_without_exposing_values() {
+        let parent = std::env::temp_dir().join(format!(
+            "fork-docker-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&parent).unwrap();
+        let spec = RunSpec {
+            container_name: "buzz-fork-test".into(),
+            image: "buzz-fork-hermes:dev".into(),
+            fork_config_dir: "/tmp/config".into(),
+            snapshot_dir: "/tmp/snapshot".into(),
+            index_path: "/tmp/index.json".into(),
+            state_volume: "buzz-fork-test-state".into(),
+            env: vec![("MODEL_KEY_ENV".into(), "DEEPSEEK_API_KEY".into())],
+            secret_parent: parent.clone(),
+            buzz_private_key: "private-test-value".into(),
+            model_key: "model-test-value".into(),
+            command: vec!["gateway".into(), "run".into()],
+        };
+        let args = run_args(&spec, Path::new("/tmp/fork-test/secrets"));
+        let command = args.join(" ");
+        assert!(command.contains("/opt/fork/secrets/buzz-private-key"));
+        assert!(command.contains("/opt/fork/secrets/model-key"));
+        assert!(!command.contains("private-test-value"));
+        assert!(!command.contains("model-test-value"));
+        assert!(!command.contains("unless-stopped"));
+
+        let secrets = prepare_secrets(&spec).unwrap();
+        let secret_path = secrets.0.clone();
+        assert_eq!(
+            fs::read_to_string(secret_path.join("buzz-private-key")).unwrap(),
+            "private-test-value"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        drop(secrets);
+        assert!(!secret_path.exists());
+        fs::remove_dir(parent).unwrap();
+    }
 }
