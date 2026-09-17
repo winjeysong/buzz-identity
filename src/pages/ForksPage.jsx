@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   Play,
   Plus,
+  Pencil,
   Radio,
   RefreshCw,
   ScrollText,
@@ -37,6 +38,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Save } from "lucide-react";
 
 const invoke = window.__TAURI__?.core?.invoke;
 
@@ -122,6 +124,7 @@ export default function ForksPage() {
   const [identities, setIdentities] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -158,6 +161,7 @@ export default function ForksPage() {
 
   function startCreate() {
     setCreating(true);
+    setEditingId("");
     setSelectedId("");
     setError("");
     setNotice("");
@@ -171,6 +175,33 @@ export default function ForksPage() {
       buzz: { relayUrl: "https://buzz.artpalstudio.com", homeChannel: "" },
       modelKey: "",
     });
+  }
+
+  async function startEdit(fork) {
+    if (!invoke || busy) return;
+    setBusy("load-edit");
+    setError("");
+    setNotice("");
+    setLogs("");
+    try {
+      const config = await invoke("get_fork", { id: fork.id });
+      setDraft({
+        name: config.name,
+        identityId: config.identityId,
+        domain: config.domain ?? "",
+        knowledgeSources: config.knowledgeSources,
+        model: config.model,
+        buzz: config.buzz,
+        modelKey: "",
+        hasModelKey: fork.hasModelKey,
+      });
+      setEditingId(fork.id);
+      setCreating(true);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy("");
+    }
   }
 
   async function chooseSourceDirectory(index, type) {
@@ -196,10 +227,11 @@ export default function ForksPage() {
     }
   }
 
-  async function submitCreate(event) {
+  async function submitFork(event) {
     event.preventDefault();
     if (!invoke || busy) return;
-    setBusy("create");
+    const updating = Boolean(editingId);
+    setBusy(updating ? "update" : "create");
     setError("");
     try {
       const payload = {
@@ -209,12 +241,13 @@ export default function ForksPage() {
           .filter((source) => (source.type === "git" ? source.repoPath : source.path).trim())
           .map((source) => ({ ...source, label: source.label.trim() || source.repoPath || source.path })),
       };
-      const created = await invoke("create_fork", { draft: payload });
+      const saved = await invoke(updating ? "update_fork" : "create_fork", updating ? { id: editingId, draft: payload } : { draft: payload });
       setCreating(false);
+      setEditingId("");
       setDraft(null);
       await load();
-      setSelectedId(created.id);
-      setNotice("分身已创建。下一步：构建知识快照。");
+      setSelectedId(saved.id);
+      setNotice(updating ? "配置与 Buzz Profile 已同步。更新知识来源后请重新构建。" : "分身已创建。下一步：构建知识快照。");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -284,6 +317,7 @@ export default function ForksPage() {
                   onClick={() => {
                     setSelectedId(fork.id);
                     setCreating(false);
+                    setEditingId("");
                     setLogs("");
                     setNotice("");
                     setError("");
@@ -337,14 +371,14 @@ export default function ForksPage() {
           ) : creating && draft ? (
             <form
               className="mx-auto w-full max-w-[920px] px-[clamp(28px,5vw,72px)] py-[clamp(32px,5vh,56px)]"
-              onSubmit={submitCreate}
+              onSubmit={submitFork}
             >
               <div className="mb-8 flex items-start justify-between gap-6">
                 <div className="min-w-0">
                   <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-primary dark:text-sidebar-primary">分身</p>
-                  <h1 className="text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">创建分身</h1>
+                  <h1 className="text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">{editingId ? "编辑分身" : "创建分身"}</h1>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    使用身份连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。
+                    {editingId ? "更新身份、知识来源、模型与 Buzz 连接配置。" : "使用身份连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。"}
                   </p>
                 </div>
                 <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
@@ -494,7 +528,7 @@ export default function ForksPage() {
                     type="password"
                     value={draft.modelKey}
                     onChange={(event) => setDraft({ ...draft, modelKey: event.target.value })}
-                    placeholder="模型 API Key（保存在系统凭据存储）"
+                    placeholder={editingId && draft.hasModelKey ? "已保存模型 API Key；留空不修改" : "模型 API Key（保存在系统凭据存储）"}
                     aria-label="模型 API Key"
                   />
                   </CardContent>
@@ -533,15 +567,15 @@ export default function ForksPage() {
                 </Card>
 
                 <div className="flex items-center gap-3 pt-2">
-                  <Button type="submit" disabled={busy === "create" || !draft.identityId}>
-                    {busy === "create" ? (
+                  <Button type="submit" disabled={busy === "create" || busy === "update" || !draft.identityId}>
+                    {busy === "create" || busy === "update" ? (
                       <LoaderCircle className="size-4 animate-spin" />
                     ) : (
-                      <Plus className="size-4" />
+                      editingId ? <Save className="size-4" /> : <Plus className="size-4" />
                     )}
-                    创建分身
+                    {editingId ? "保存配置" : "创建分身"}
                   </Button>
-                  <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
+                  <Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditingId(""); setDraft(null); }}>
                     取消
                   </Button>
                 </div>
@@ -565,6 +599,7 @@ export default function ForksPage() {
               onLogs={() =>
                 runAction("logs", async () => setLogs(await invoke("fork_logs", { id: selected.id, tail: 200 })))
               }
+              onEdit={() => startEdit(selected)}
               onDelete={() => setDeleteTarget(selected)}
             />
           ) : (
@@ -613,7 +648,7 @@ export default function ForksPage() {
   );
 }
 
-function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDelete }) {
+function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onEdit, onDelete }) {
   const label = STATE_LABELS[fork.state] ?? STATE_LABELS.draft;
   const [connection, setConnection] = useState(null);
   const [publicKey, setPublicKey] = useState("");
@@ -647,10 +682,12 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
     }
   }
 
+  const connectionError = `${connection?.errorCode ?? ""} ${connection?.errorMessage ?? ""}`.toLowerCase();
   const membershipBlocked =
     connection?.needsAttention ||
-    (connection?.errorCode ?? "").includes("membership") ||
-    (connection?.errorMessage ?? "").includes("membership_required");
+    connectionError.includes("membership") ||
+    connectionError.includes("member");
+  const profileMissing = connectionError.includes("no profile");
 
   return (
     <div className="mx-auto w-full max-w-[920px] px-[clamp(28px,5vw,72px)] py-[clamp(32px,5vh,56px)]">
@@ -660,9 +697,21 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
           <h1 className="truncate text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">{fork.name}</h1>
           <p className="mt-2 text-sm text-muted-foreground">创建于 {formatCreated(fork.createdAt)}</p>
         </div>
-        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
-          <Bot className="size-5" />
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-3">
+          <span className="grid size-11 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+            <Bot className="size-5" />
+          </span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={onEdit} disabled={Boolean(busy)}>
+              <Pencil className="size-3.5" />
+              编辑配置
+            </Button>
+            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} disabled={Boolean(busy)}>
+              <Trash2 className="size-3.5" />
+              删除
+            </Button>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -696,15 +745,9 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
                 启动
               </Button>
             )}
-            <Button variant="outline" onClick={onLogs} disabled={Boolean(busy)}>
+            <Button variant="ghost" onClick={onLogs} disabled={Boolean(busy)} className="ml-auto">
               {busy === "logs" ? <LoaderCircle className="size-4 animate-spin" /> : <ScrollText className="size-4" />}
               查看日志
-            </Button>
-          </div>
-          <div className="mt-4 border-t pt-3">
-            <Button variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onDelete}>
-              <Trash2 className="size-4" />
-              删除分身
             </Button>
           </div>
           </CardContent>
@@ -731,14 +774,18 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onDele
             {connection ? <ConnectionBadge state={connection.state} /> : <span>读取中…</span>}
           </div>
 
-          {membershipBlocked ? (
+          {membershipBlocked || profileMissing ? (
             <div className="mt-4 rounded-xl border border-primary/20 bg-primary/10 p-4">
               <div className="flex items-start gap-2.5">
                 <ShieldAlert className="mt-0.5 size-4 shrink-0 text-primary dark:text-sidebar-primary" />
                 <div className="min-w-0 flex-1 space-y-2 text-sm leading-6 text-foreground">
-                  <p className="font-medium">该身份还不是 Relay 工作区成员，无法接收消息。</p>
+                  <p className="font-medium">
+                    {profileMissing ? "该身份尚未设置 Buzz Profile。" : "该身份还不是 Relay 工作区成员，无法接收消息。"}
+                  </p>
                   <p className="text-xs">
-                    请把下面的公钥发给 Buzz 管理员，在 Relay 工作区中把它添加为成员，然后重新启动分身。
+                    {profileMissing
+                      ? "下次启动时会自动使用分身名称和知识域描述创建 Profile；已有 Profile 不会被覆盖。"
+                      : "请把下面的公钥发给 Buzz 管理员，在 Relay 工作区中把它添加为成员，然后重新启动分身。"}
                   </p>
                   {publicKey ? (
                     <div className="flex items-center gap-2">

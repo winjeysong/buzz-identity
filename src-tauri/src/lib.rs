@@ -283,6 +283,7 @@ pub fn run() {
             delete_identity,
             fork_cmd::list_forks,
             fork_cmd::create_fork,
+            fork_cmd::update_fork,
             fork_cmd::get_fork,
             fork_cmd::delete_fork,
             fork_cmd::set_fork_model_key,

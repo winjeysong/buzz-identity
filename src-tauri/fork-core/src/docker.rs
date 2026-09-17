@@ -37,8 +37,16 @@ pub struct RunSpec {
     pub env: Vec<(String, String)>,
     pub secret_parent: PathBuf,
     pub buzz_private_key: String,
+    pub model_key_env: String,
     pub model_key: String,
     pub command: Vec<String>,
+}
+
+pub struct ProfileSyncSpec {
+    pub image: String,
+    pub env: Vec<(String, String)>,
+    pub secret_parent: PathBuf,
+    pub buzz_private_key: String,
 }
 
 struct SecretDir(PathBuf);
@@ -76,13 +84,13 @@ pub fn run(spec: &RunSpec) -> Result<(), String> {
     let secrets = prepare_secrets(spec)?;
     let args = run_args(spec, &secrets.0);
     run_docker_owned(&args)?;
-    for _ in 0..50 {
+    for _ in 0..300 {
         if run_docker(&[
             "exec",
             &spec.container_name,
-            "test",
-            "-f",
-            "/run/fork-secrets-ready",
+            "/bin/sh",
+            "-c",
+            "test -f /run/fork-secrets-ready",
         ])
         .is_ok()
         {
@@ -98,6 +106,11 @@ pub fn run(spec: &RunSpec) -> Result<(), String> {
     }
     let _ = stop(&spec.container_name);
     Err("分身启动失败或超时，请查看容器日志。".into())
+}
+
+pub fn sync_profile(spec: &ProfileSyncSpec) -> Result<(), String> {
+    let secrets = prepare_profile_sync_secret(spec)?;
+    run_docker_owned(&sync_profile_args(spec, &secrets.0)).map(|_| ())
 }
 
 fn run_args(spec: &RunSpec, secret_dir: &Path) -> Vec<String> {
@@ -136,13 +149,8 @@ fn run_args(spec: &RunSpec, secret_dir: &Path) -> Vec<String> {
         ),
         "--mount".into(),
         format!(
-            "type=bind,src={},dst=/opt/fork/secrets/buzz-private-key,readonly",
-            secret_dir.join("buzz-private-key").display()
-        ),
-        "--mount".into(),
-        format!(
-            "type=bind,src={},dst=/opt/fork/secrets/model-key,readonly",
-            secret_dir.join("model-key").display()
+            "type=bind,src={},dst=/opt/fork/secrets/profile.env,readonly",
+            secret_dir.join("profile.env").display()
         ),
         "--tmpfs".into(),
         "/run:rw,nosuid,nodev,mode=1777,size=16m".into(),
@@ -166,21 +174,74 @@ fn run_args(spec: &RunSpec, secret_dir: &Path) -> Vec<String> {
     args
 }
 
+fn sync_profile_args(spec: &ProfileSyncSpec, secret_dir: &Path) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "--rm".into(),
+        "--read-only".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--security-opt".into(),
+        "no-new-privileges:true".into(),
+        "--pids-limit".into(),
+        "32".into(),
+        "--user".into(),
+        "10000:10000".into(),
+        "--mount".into(),
+        format!(
+            "type=bind,src={},dst=/opt/fork/secrets/profile.env,readonly",
+            secret_dir.join("profile.env").display()
+        ),
+        "--tmpfs".into(),
+        "/tmp:rw,nosuid,nodev,noexec,size=16m".into(),
+    ];
+    for (key, value) in &spec.env {
+        args.push("-e".into());
+        args.push(format!("{}={}", key, value));
+    }
+    args.push(spec.image.clone());
+    args.extend([
+        "/bin/sh".into(),
+        "-ceu".into(),
+        "set -a; . /opt/fork/secrets/profile.env; set +a; exec /usr/local/bin/buzz users set-profile --name \"$FORK_PROFILE_NAME\" --about \"$FORK_PROFILE_ABOUT\"".into(),
+    ]);
+    args
+}
+
 fn prepare_secrets(spec: &RunSpec) -> Result<SecretDir, String> {
+    prepare_secret_env(
+        &spec.secret_parent,
+        format!(
+            "BUZZ_PRIVATE_KEY={}\n{}={}\n",
+            serde_json::to_string(&spec.buzz_private_key).map_err(|error| error.to_string())?,
+            spec.model_key_env,
+            serde_json::to_string(&spec.model_key).map_err(|error| error.to_string())?,
+        ),
+    )
+}
+
+fn prepare_profile_sync_secret(spec: &ProfileSyncSpec) -> Result<SecretDir, String> {
+    prepare_secret_env(
+        &spec.secret_parent,
+        format!(
+            "BUZZ_PRIVATE_KEY={}\n",
+            serde_json::to_string(&spec.buzz_private_key).map_err(|error| error.to_string())?,
+        ),
+    )
+}
+
+fn prepare_secret_env(secret_parent: &Path, profile_env: String) -> Result<SecretDir, String> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let dir = spec
-        .secret_parent
-        .join(format!(".runtime-secrets-{}-{nonce}", std::process::id()));
+    let dir = secret_parent.join(format!(".runtime-secrets-{}-{nonce}", std::process::id()));
     fs::create_dir(&dir).map_err(|error| format!("无法创建临时凭据目录：{error}"))?;
     let secrets = SecretDir(dir);
     #[cfg(unix)]
     fs::set_permissions(&secrets.0, fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("无法保护临时凭据目录：{error}"))?;
-    write_secret(&secrets.0.join("buzz-private-key"), spec.buzz_private_key.as_bytes())?;
-    write_secret(&secrets.0.join("model-key"), spec.model_key.as_bytes())?;
+    write_secret(&secrets.0.join("profile.env"), profile_env.as_bytes())?;
     Ok(secrets)
 }
 
@@ -346,26 +407,31 @@ mod tests {
             snapshot_dir: "/tmp/snapshot".into(),
             index_path: "/tmp/index.json".into(),
             state_volume: "buzz-fork-test-state".into(),
-            env: vec![("MODEL_KEY_ENV".into(), "DEEPSEEK_API_KEY".into())],
+            env: vec![
+                ("HERMES_MODEL".into(), "deepseek-flash".into()),
+                ("FORK_PROFILE_NAME".into(), "测试分身".into()),
+                ("FORK_PROFILE_ABOUT".into(), "测试知识域".into()),
+            ],
             secret_parent: parent.clone(),
             buzz_private_key: "private-test-value".into(),
+            model_key_env: "DEEPSEEK_API_KEY".into(),
             model_key: "model-test-value".into(),
             command: vec!["gateway".into(), "run".into()],
         };
         let args = run_args(&spec, Path::new("/tmp/fork-test/secrets"));
         let command = args.join(" ");
-        assert!(command.contains("/opt/fork/secrets/buzz-private-key"));
-        assert!(command.contains("/opt/fork/secrets/model-key"));
+        assert!(command.contains("/opt/fork/secrets/profile.env"));
         assert!(!command.contains("private-test-value"));
         assert!(!command.contains("model-test-value"));
         assert!(!command.contains("unless-stopped"));
+        assert!(command.contains("FORK_PROFILE_NAME=测试分身"));
+        assert!(command.contains("FORK_PROFILE_ABOUT=测试知识域"));
 
         let secrets = prepare_secrets(&spec).unwrap();
         let secret_path = secrets.0.clone();
-        assert_eq!(
-            fs::read_to_string(secret_path.join("buzz-private-key")).unwrap(),
-            "private-test-value"
-        );
+        let profile_env = fs::read_to_string(secret_path.join("profile.env")).unwrap();
+        assert!(profile_env.contains("BUZZ_PRIVATE_KEY=\"private-test-value\""));
+        assert!(profile_env.contains("DEEPSEEK_API_KEY=\"model-test-value\""));
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(&secret_path).unwrap().permissions().mode() & 0o777,
@@ -373,6 +439,29 @@ mod tests {
         );
         drop(secrets);
         assert!(!secret_path.exists());
+
+        let sync_spec = ProfileSyncSpec {
+            image: "buzz-fork-hermes:dev".into(),
+            env: vec![
+                ("BUZZ_RELAY_URL".into(), "wss://relay.example".into()),
+                ("FORK_PROFILE_NAME".into(), "测试分身".into()),
+                ("FORK_PROFILE_ABOUT".into(), "测试知识域".into()),
+            ],
+            secret_parent: parent.clone(),
+            buzz_private_key: "private-test-value".into(),
+        };
+        let sync_args = sync_profile_args(&sync_spec, Path::new("/tmp/fork-test/secrets"));
+        let sync_command = sync_args.join(" ");
+        assert!(sync_command.contains("--rm"));
+        assert!(sync_command.contains("users set-profile"));
+        assert!(!sync_command.contains("private-test-value"));
+
+        let sync_secrets = prepare_profile_sync_secret(&sync_spec).unwrap();
+        let sync_secret_path = sync_secrets.0.clone();
+        let sync_profile_env = fs::read_to_string(sync_secret_path.join("profile.env")).unwrap();
+        assert_eq!(sync_profile_env, "BUZZ_PRIVATE_KEY=\"private-test-value\"\n");
+        drop(sync_secrets);
+        assert!(!sync_secret_path.exists());
         fs::remove_dir(parent).unwrap();
     }
 }

@@ -16,7 +16,7 @@ const DEFAULT_DENY_PREFIXES: &[&str] = &[
 const DEFAULT_DENY_SUFFIXES: &[&str] = &[".key", ".pem", ".p12", ".pfx"];
 const DEFAULT_DENY_NAMES: &[&str] = &[".env", ".env.local", ".env.development", ".env.production"];
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum KnowledgeSource {
     Git {

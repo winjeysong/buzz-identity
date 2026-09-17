@@ -6,6 +6,7 @@ surface by editing its own config file.
 """
 
 import json
+import os
 import sys
 
 
@@ -45,6 +46,19 @@ def main() -> int:
             return 1
 
     config["model"].update(model)
+    relay_url = os.environ.get("BUZZ_RELAY_URL", "").strip()
+    if not relay_url:
+        print("BUZZ_RELAY_URL must be set", file=sys.stderr)
+        return 1
+    buzz = config["gateway"]["platforms"]["buzz"]["extra"]
+    buzz.update({
+        "relay_url": relay_url,
+        "cli_path": os.environ.get("BUZZ_CLI_PATH", "/usr/local/bin/buzz"),
+        "home_channel": os.environ.get("BUZZ_HOME_CHANNEL", ""),
+        "transport": os.environ.get("BUZZ_TRANSPORT", "websocket"),
+        "allow_all_users": os.environ.get("BUZZ_ALLOW_ALL_USERS", "").lower() == "true",
+        "require_mention": os.environ.get("BUZZ_REQUIRE_MENTION", "").lower() == "true",
+    })
 
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(config, handle, ensure_ascii=False, indent=2)

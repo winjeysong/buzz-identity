@@ -5,21 +5,40 @@ profile_name="fork"
 profile_home="${HERMES_HOME:-/opt/data}/profiles/${profile_name}"
 
 for source in /fork-config/SOUL.md /fork-config/SKILL.md /fork-config/config.json \
-    /opt/fork/secrets/buzz-private-key /opt/fork/secrets/model-key; do
+    /opt/fork/secrets/profile.env; do
     if [ ! -f "$source" ] || [ -L "$source" ]; then
         echo "[fork] missing required regular file: $source" >&2
         exit 1
     fi
 done
 
-export BUZZ_PRIVATE_KEY="$(cat /opt/fork/secrets/buzz-private-key)"
-model_key="$(cat /opt/fork/secrets/model-key)"
-export "${MODEL_KEY_ENV}=${model_key}"
-unset model_key
-touch /run/fork-secrets-ready
-
 if [ ! -d "$profile_home" ]; then
     /opt/hermes/.venv/bin/hermes profile create "$profile_name" --no-alias --no-skills
+fi
+
+install -m 0600 /opt/fork/secrets/profile.env /run/profile.env
+ln -sfn /run/profile.env "$profile_home/.env"
+
+profile_status=0
+profile_result="$({
+    set -a
+    . /run/profile.env
+    set +a
+    /usr/local/bin/buzz users get
+} 2>&1)" || profile_status=$?
+if [ "${profile_status:-0}" -ne 0 ] && ! printf '%s' "$profile_result" | grep -qi 'no profile'; then
+    echo "[fork] failed to read Buzz profile: $profile_result" >&2
+    exit "$profile_status"
+fi
+if ! printf '%s' "$profile_result" | grep -q '"pubkey"'; then
+    (
+        set -a
+        . /run/profile.env
+        set +a
+        /usr/local/bin/buzz users set-profile \
+            --name "$FORK_PROFILE_NAME" \
+            --about "$FORK_PROFILE_ABOUT"
+    )
 fi
 
 /opt/hermes/.venv/bin/python /opt/fork/merge_config.py \
@@ -30,4 +49,5 @@ install -d -m 0700 "$profile_home/skills/$profile_name"
 install -m 0444 /fork-config/SKILL.md "$profile_home/skills/$profile_name/SKILL.md"
 
 export HERMES_HOME="$profile_home"
+touch /run/fork-secrets-ready
 exec /opt/hermes/docker/main-wrapper.sh "$@"

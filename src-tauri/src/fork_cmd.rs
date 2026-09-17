@@ -56,6 +56,13 @@ fn render_persona(name: &str, domain: Option<&str>) -> Persona {
     }
 }
 
+fn normalize_domain(input: Option<String>) -> Option<String> {
+    input.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
 fn validate_fork_name(input: &str) -> Result<String, String> {
     let name = input.trim();
     if name.is_empty() {
@@ -78,6 +85,26 @@ fn provider_env_name(provider: &str) -> &'static str {
         "anthropic" => "ANTHROPIC_API_KEY",
         _ => "MODEL_API_KEY",
     }
+}
+
+fn runtime_env(config: &ForkConfig) -> Vec<(String, String)> {
+    vec![
+        ("BUZZ_RELAY_URL".to_string(), config.buzz.relay_url.clone()),
+        ("BUZZ_HOME_CHANNEL".to_string(), config.buzz.home_channel.clone()),
+        ("BUZZ_ALLOW_ALL_USERS".to_string(), "true".to_string()),
+        ("BUZZ_REQUIRE_MENTION".to_string(), "true".to_string()),
+        ("BUZZ_TRANSPORT".to_string(), "websocket".to_string()),
+        ("BUZZ_CLI_PATH".to_string(), "/usr/local/bin/buzz".to_string()),
+        ("HERMES_MODEL".to_string(), config.model.model.clone()),
+        ("FORK_PROFILE_NAME".to_string(), config.name.clone()),
+        (
+            "FORK_PROFILE_ABOUT".to_string(),
+            config
+                .domain
+                .clone()
+                .unwrap_or_else(|| DEFAULT_DOMAIN.to_string()),
+        ),
+    ]
 }
 
 fn summary_of(root: &std::path::Path, config: &ForkConfig) -> ForkSummary {
@@ -133,12 +160,14 @@ pub fn create_fork(app: AppHandle, draft: ForkDraft) -> Result<ForkConfig, Strin
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
+    let domain = normalize_domain(draft.domain);
     let config = ForkConfig {
         id: new_fork_id(),
         name: name.clone(),
         created_at: millis,
         identity_id: draft.identity_id,
-        persona: render_persona(&name, draft.domain.as_deref()),
+        domain: domain.clone(),
+        persona: render_persona(&name, domain.as_deref()),
         knowledge_sources: draft.knowledge_sources,
         model: draft.model,
         buzz: draft.buzz,
@@ -146,6 +175,44 @@ pub fn create_fork(app: AppHandle, draft: ForkDraft) -> Result<ForkConfig, Strin
     };
     store::create_fork_at(&root, &config)?;
     store::set_model_key(&config.id, draft.model_key.trim())?;
+    Ok(config)
+}
+
+#[tauri::command]
+pub fn update_fork(app: AppHandle, id: String, draft: ForkDraft) -> Result<ForkConfig, String> {
+    let name = validate_fork_name(&draft.name)?;
+    if draft.knowledge_sources.is_empty() {
+        return Err("至少需要一个知识来源。".to_string());
+    }
+
+    let root = forks_root(&app)?;
+    let identities = identities_root(&app)?;
+    let identity = read_identity_at(&identities, &draft.identity_id)?;
+
+    let mut config = store::read_fork_at(&root, &id)?;
+    let knowledge_changed = config.knowledge_sources != draft.knowledge_sources;
+    let domain = normalize_domain(draft.domain);
+    config.name = name.clone();
+    config.identity_id = draft.identity_id;
+    config.domain = domain.clone();
+    config.persona = render_persona(&name, domain.as_deref());
+    config.knowledge_sources = draft.knowledge_sources;
+    config.model = draft.model;
+    config.buzz = draft.buzz;
+    if knowledge_changed {
+        config.runtime = RuntimeState::default();
+    }
+    docker::sync_profile(&docker::ProfileSyncSpec {
+        image: DEFAULT_IMAGE.to_string(),
+        env: runtime_env(&config),
+        secret_parent: store::fork_dir(&root, &id)?,
+        buzz_private_key: identity.private_key_hex,
+    })?;
+    store::write_config_at(&root, &config)?;
+
+    if !draft.model_key.trim().is_empty() {
+        store::set_model_key(&id, draft.model_key.trim())?;
+    }
     Ok(config)
 }
 
@@ -216,16 +283,7 @@ pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
     let container = container_name(&id);
     let state_volume = format!("{}-state", container);
 
-    let env = vec![
-        ("BUZZ_RELAY_URL".to_string(), config.buzz.relay_url.clone()),
-        ("BUZZ_HOME_CHANNEL".to_string(), config.buzz.home_channel.clone()),
-        ("BUZZ_ALLOW_ALL_USERS".to_string(), "true".to_string()),
-        ("BUZZ_REQUIRE_MENTION".to_string(), "true".to_string()),
-        ("BUZZ_TRANSPORT".to_string(), "websocket".to_string()),
-        ("BUZZ_CLI_PATH".to_string(), "/usr/local/bin/buzz".to_string()),
-        ("MODEL_KEY_ENV".to_string(), provider_env_name(&config.model.provider).to_string()),
-        ("HERMES_MODEL".to_string(), config.model.model.clone()),
-    ];
+    let env = runtime_env(&config);
 
     let spec = docker::RunSpec {
         container_name: container,
@@ -237,6 +295,7 @@ pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
         env,
         secret_parent: fork_dir,
         buzz_private_key: identity.private_key_hex,
+        model_key_env: provider_env_name(&config.model.provider).to_string(),
         model_key,
         command: vec!["gateway".to_string(), "run".to_string()],
     };

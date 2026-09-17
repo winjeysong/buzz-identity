@@ -44,6 +44,8 @@ pub struct ForkConfig {
     pub name: String,
     pub created_at: u64,
     pub identity_id: String,
+    #[serde(default)]
+    pub domain: Option<String>,
     pub persona: Persona,
     pub knowledge_sources: Vec<KnowledgeSource>,
     pub model: ModelConfig,
@@ -206,6 +208,7 @@ mod tests {
             name: "测试分身".into(),
             created_at: 1,
             identity_id: "identity-1".into(),
+            domain: Some("测试知识域".into()),
             persona: Persona {
                 soul: "# SOUL\n".into(),
                 skill: "# SKILL\n".into(),
@@ -235,10 +238,25 @@ mod tests {
         create_fork_at(&root, &config).unwrap();
         let loaded = read_fork_at(&root, "fork-a1").unwrap();
         assert_eq!(loaded.name, "测试分身");
+        assert_eq!(loaded.domain.as_deref(), Some("测试知识域"));
         assert_eq!(loaded.model.model, "deepseek-flash");
         assert_eq!(list_forks_at(&root).unwrap().len(), 1);
         delete_fork_at(&root, "fork-a1").unwrap();
         assert!(list_forks_at(&root).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_legacy_config_without_domain() {
+        let root = temp_root("legacy");
+        let config = sample("fork-c3");
+        create_fork_at(&root, &config).unwrap();
+        let path = fork_dir(&root, "fork-c3").unwrap().join("fork.json");
+        let mut legacy = serde_json::to_value(config).unwrap();
+        legacy.as_object_mut().unwrap().remove("domain");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        assert_eq!(read_fork_at(&root, "fork-c3").unwrap().domain, None);
         let _ = fs::remove_dir_all(&root);
     }
 
