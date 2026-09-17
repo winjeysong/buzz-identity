@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 pub const KEYRING_SERVICE: &str = "buzz-identity-fork";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +49,12 @@ pub struct ForkConfig {
     pub identity_id: String,
     #[serde(default)]
     pub domain: Option<String>,
+    #[serde(default)]
+    pub avatar_path: Option<PathBuf>,
+    #[serde(default)]
+    pub additional_instructions: Option<String>,
+    #[serde(default)]
+    pub additional_constraints: Option<String>,
     pub persona: Persona,
     pub knowledge_sources: Vec<KnowledgeSource>,
     pub model: ModelConfig,
@@ -61,8 +70,78 @@ pub struct ForkSummary {
     pub name: String,
     pub created_at: u64,
     pub identity_id: String,
+    pub avatar_path: Option<PathBuf>,
     pub state: String,
     pub has_model_key: bool,
+}
+
+const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
+
+pub fn replace_avatar_at(
+    root: &Path,
+    id: &str,
+    current: Option<&Path>,
+    source: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let dir = fork_dir(root, id)?;
+    if source == current && source.is_some_and(Path::is_file) {
+        return Ok(current.map(Path::to_path_buf));
+    }
+    let Some(source) = source else {
+        remove_managed_avatar(&dir, current)?;
+        return Ok(None);
+    };
+    let metadata = fs::symlink_metadata(source).map_err(|_| "无法读取头像文件。".to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("头像必须是普通图片文件。".into());
+    }
+    if metadata.len() > MAX_AVATAR_BYTES {
+        return Err("头像不能超过 2 MB。".into());
+    }
+    let bytes = fs::read(source).map_err(|_| "无法读取头像文件。".to_string())?;
+    if bytes.len() as u64 > MAX_AVATAR_BYTES {
+        return Err("头像不能超过 2 MB。".into());
+    }
+    let extension = avatar_extension(&bytes)?;
+    let target = dir.join(format!("avatar.{extension}"));
+    let temporary = dir.join(".avatar.tmp");
+    fs::write(&temporary, bytes).map_err(|error| format!("无法保存头像：{error}"))?;
+    if target.exists() {
+        fs::remove_file(&target).map_err(|error| format!("无法更新头像：{error}"))?;
+    }
+    fs::rename(&temporary, &target).map_err(|error| format!("无法更新头像：{error}"))?;
+    #[cfg(unix)]
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o444))
+        .map_err(|error| format!("无法保护头像文件：{error}"))?;
+    remove_managed_avatar(&dir, current.filter(|path| *path != target))?;
+    Ok(Some(target))
+}
+
+fn avatar_extension(bytes: &[u8]) -> Result<&'static str, String> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Ok("png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Ok("jpg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Ok("webp")
+    } else {
+        Err("头像仅支持 PNG、JPEG 或 WebP。".into())
+    }
+}
+
+fn remove_managed_avatar(dir: &Path, current: Option<&Path>) -> Result<(), String> {
+    let Some(path) = current else {
+        return Ok(());
+    };
+    let managed = path.parent() == Some(dir)
+        && matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("avatar.png" | "avatar.jpg" | "avatar.webp")
+        );
+    if managed && path.exists() {
+        fs::remove_file(path).map_err(|error| format!("无法删除头像：{error}"))?;
+    }
+    Ok(())
 }
 
 pub fn fork_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
@@ -209,6 +288,9 @@ mod tests {
             created_at: 1,
             identity_id: "identity-1".into(),
             domain: Some("测试知识域".into()),
+            avatar_path: None,
+            additional_instructions: Some("先给结论".into()),
+            additional_constraints: Some("不讨论财务".into()),
             persona: Persona {
                 soul: "# SOUL\n".into(),
                 skill: "# SKILL\n".into(),
@@ -239,6 +321,8 @@ mod tests {
         let loaded = read_fork_at(&root, "fork-a1").unwrap();
         assert_eq!(loaded.name, "测试分身");
         assert_eq!(loaded.domain.as_deref(), Some("测试知识域"));
+        assert_eq!(loaded.additional_instructions.as_deref(), Some("先给结论"));
+        assert_eq!(loaded.additional_constraints.as_deref(), Some("不讨论财务"));
         assert_eq!(loaded.model.model, "deepseek-flash");
         assert_eq!(list_forks_at(&root).unwrap().len(), 1);
         delete_fork_at(&root, "fork-a1").unwrap();
@@ -254,9 +338,37 @@ mod tests {
         let path = fork_dir(&root, "fork-c3").unwrap().join("fork.json");
         let mut legacy = serde_json::to_value(config).unwrap();
         legacy.as_object_mut().unwrap().remove("domain");
+        legacy.as_object_mut().unwrap().remove("avatarPath");
+        legacy.as_object_mut().unwrap().remove("additionalInstructions");
+        legacy.as_object_mut().unwrap().remove("additionalConstraints");
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
 
-        assert_eq!(read_fork_at(&root, "fork-c3").unwrap().domain, None);
+        let loaded = read_fork_at(&root, "fork-c3").unwrap();
+        assert_eq!(loaded.domain, None);
+        assert_eq!(loaded.avatar_path, None);
+        assert_eq!(loaded.additional_instructions, None);
+        assert_eq!(loaded.additional_constraints, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stores_and_removes_valid_avatar() {
+        let root = temp_root("avatar");
+        let config = sample("fork-d4");
+        create_fork_at(&root, &config).unwrap();
+        let source = root.join("source.png");
+        fs::write(&source, b"\x89PNG\r\n\x1a\nimage").unwrap();
+
+        let avatar = replace_avatar_at(&root, "fork-d4", None, Some(&source)).unwrap();
+        assert_eq!(
+            avatar.as_ref().and_then(|path| path.extension()),
+            Some("png".as_ref())
+        );
+        assert!(avatar.as_ref().unwrap().is_file());
+        assert!(replace_avatar_at(&root, "fork-d4", avatar.as_deref(), None)
+            .unwrap()
+            .is_none());
+        assert!(!avatar.unwrap().exists());
         let _ = fs::remove_dir_all(&root);
     }
 

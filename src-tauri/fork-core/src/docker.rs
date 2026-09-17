@@ -39,6 +39,7 @@ pub struct RunSpec {
     pub buzz_private_key: String,
     pub model_key_env: String,
     pub model_key: String,
+    pub avatar_path: Option<PathBuf>,
     pub command: Vec<String>,
 }
 
@@ -47,6 +48,7 @@ pub struct ProfileSyncSpec {
     pub env: Vec<(String, String)>,
     pub secret_parent: PathBuf,
     pub buzz_private_key: String,
+    pub avatar_path: Option<PathBuf>,
 }
 
 struct SecretDir(PathBuf);
@@ -169,6 +171,15 @@ fn run_args(spec: &RunSpec, secret_dir: &Path) -> Vec<String> {
         args.push("-e".into());
         args.push(format!("{}={}", key, value));
     }
+    if let Some(path) = &spec.avatar_path {
+        args.extend([
+            "--mount".into(),
+            format!(
+                "type=bind,src={},dst=/opt/fork/profile-avatar,readonly",
+                path.display()
+            ),
+        ]);
+    }
     args.push(spec.image.clone());
     args.extend(spec.command.iter().cloned());
     args
@@ -199,11 +210,20 @@ fn sync_profile_args(spec: &ProfileSyncSpec, secret_dir: &Path) -> Vec<String> {
         args.push("-e".into());
         args.push(format!("{}={}", key, value));
     }
+    if let Some(path) = &spec.avatar_path {
+        args.extend([
+            "--mount".into(),
+            format!(
+                "type=bind,src={},dst=/opt/fork/profile-avatar,readonly",
+                path.display()
+            ),
+        ]);
+    }
     args.push(spec.image.clone());
     args.extend([
         "/bin/sh".into(),
         "-ceu".into(),
-        "set -a; . /opt/fork/secrets/profile.env; set +a; exec /usr/local/bin/buzz users set-profile --name \"$FORK_PROFILE_NAME\" --about \"$FORK_PROFILE_ABOUT\"".into(),
+        "set -a; . /opt/fork/secrets/profile.env; set +a; avatar_url=''; if [ -f /opt/fork/profile-avatar ]; then avatar_url=\"$(/usr/local/bin/buzz upload file --file /opt/fork/profile-avatar | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)[\"url\"])')\"; fi; exec /usr/local/bin/buzz users set-profile --name \"$FORK_PROFILE_NAME\" --about \"$FORK_PROFILE_ABOUT\" --avatar \"$avatar_url\"".into(),
     ]);
     args
 }
@@ -416,6 +436,7 @@ mod tests {
             buzz_private_key: "private-test-value".into(),
             model_key_env: "DEEPSEEK_API_KEY".into(),
             model_key: "model-test-value".into(),
+            avatar_path: Some("/tmp/avatar.png".into()),
             command: vec!["gateway".into(), "run".into()],
         };
         let args = run_args(&spec, Path::new("/tmp/fork-test/secrets"));
@@ -426,6 +447,9 @@ mod tests {
         assert!(!command.contains("unless-stopped"));
         assert!(command.contains("FORK_PROFILE_NAME=测试分身"));
         assert!(command.contains("FORK_PROFILE_ABOUT=测试知识域"));
+        assert!(command.contains(
+            "src=/tmp/avatar.png,dst=/opt/fork/profile-avatar,readonly"
+        ));
 
         let secrets = prepare_secrets(&spec).unwrap();
         let secret_path = secrets.0.clone();
@@ -449,11 +473,14 @@ mod tests {
             ],
             secret_parent: parent.clone(),
             buzz_private_key: "private-test-value".into(),
+            avatar_path: Some("/tmp/avatar.png".into()),
         };
         let sync_args = sync_profile_args(&sync_spec, Path::new("/tmp/fork-test/secrets"));
         let sync_command = sync_args.join(" ");
         assert!(sync_command.contains("--rm"));
         assert!(sync_command.contains("users set-profile"));
+        assert!(sync_command.contains("upload file --file /opt/fork/profile-avatar"));
+        assert!(sync_command.contains("--avatar \"$avatar_url\""));
         assert!(!sync_command.contains("private-test-value"));
 
         let sync_secrets = prepare_profile_sync_secret(&sync_spec).unwrap();

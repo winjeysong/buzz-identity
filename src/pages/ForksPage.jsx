@@ -10,6 +10,7 @@ import {
   Cpu,
   FolderOpen,
   GitBranch,
+  ImagePlus,
   LoaderCircle,
   Play,
   Plus,
@@ -33,14 +34,21 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { Save } from "lucide-react";
 
 const invoke = window.__TAURI__?.core?.invoke;
+const convertFileSrc = window.__TAURI__?.core?.convertFileSrc;
+
+function avatarSource(path) {
+  return path && convertFileSrc ? convertFileSrc(path) : undefined;
+}
 
 const STATE_LABELS = {
   draft: { text: "草稿", tone: "bg-muted text-muted-foreground" },
@@ -170,6 +178,9 @@ export default function ForksPage() {
       name: "",
       identityId: identities[0]?.id ?? "",
       domain: "",
+      avatarPath: null,
+      additionalInstructions: "",
+      additionalConstraints: "",
       knowledgeSources: [emptyGitSource()],
       model: { provider: "deepseek", model: "deepseek-flash", baseUrl: "https://api.deepseek.com/v1" },
       buzz: { relayUrl: "https://buzz.artpalstudio.com", homeChannel: "" },
@@ -189,6 +200,9 @@ export default function ForksPage() {
         name: config.name,
         identityId: config.identityId,
         domain: config.domain ?? "",
+        avatarPath: config.avatarPath ?? null,
+        additionalInstructions: config.additionalInstructions ?? "",
+        additionalConstraints: config.additionalConstraints ?? "",
         knowledgeSources: config.knowledgeSources,
         model: config.model,
         buzz: config.buzz,
@@ -227,6 +241,23 @@ export default function ForksPage() {
     }
   }
 
+  async function chooseAvatar() {
+    try {
+      const path = await open({
+        directory: false,
+        multiple: false,
+        title: "选择分身头像",
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (typeof path === "string") {
+        setDraft((current) => ({ ...current, avatarPath: path }));
+        setError("");
+      }
+    } catch (reason) {
+      setError(`无法选择头像：${String(reason)}`);
+    }
+  }
+
   async function submitFork(event) {
     event.preventDefault();
     if (!invoke || busy) return;
@@ -237,6 +268,8 @@ export default function ForksPage() {
       const payload = {
         ...draft,
         domain: draft.domain.trim() || null,
+        additionalInstructions: draft.additionalInstructions.trim() || null,
+        additionalConstraints: draft.additionalConstraints.trim() || null,
         knowledgeSources: draft.knowledgeSources
           .filter((source) => (source.type === "git" ? source.repoPath : source.path).trim())
           .map((source) => ({ ...source, label: source.label.trim() || source.repoPath || source.path })),
@@ -247,7 +280,11 @@ export default function ForksPage() {
       setDraft(null);
       await load();
       setSelectedId(saved.id);
-      setNotice(updating ? "配置与 Buzz Profile 已同步。更新知识来源后请重新构建。" : "分身已创建。下一步：构建知识快照。");
+      setNotice(
+        updating
+          ? "配置与 Buzz Profile 已同步；运行中的分身重启后应用新设定，更新知识来源后请重新构建。"
+          : "分身已创建。下一步：构建知识快照。",
+      );
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -323,19 +360,27 @@ export default function ForksPage() {
                     setError("");
                   }}
                   className={cn(
-                    "block h-auto w-full rounded-xl px-3 py-2.5 text-left",
+                    "flex h-auto w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left",
                     selectedId === fork.id ? "bg-sidebar-accent" : "hover:bg-muted/70",
                   )}
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate text-sm font-medium">{fork.name}</span>
-                    <Badge className={cn("shrink-0 border-0 px-2 text-[10px]", label.tone)}>
-                      {label.text}
-                    </Badge>
-                  </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                    {formatCreated(fork.createdAt)}
-                    {fork.hasModelKey ? "" : " · 未设置模型 Key"}
+                  <Avatar className="size-9 rounded-xl">
+                    <AvatarImage src={avatarSource(fork.avatarPath)} alt="" />
+                    <AvatarFallback className="rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <Bot className="size-4" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-medium">{fork.name}</span>
+                      <Badge className={cn("shrink-0 border-0 px-2 text-[10px]", label.tone)}>
+                        {label.text}
+                      </Badge>
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                      {formatCreated(fork.createdAt)}
+                      {fork.hasModelKey ? "" : " · 未设置模型 Key"}
+                    </span>
                   </span>
                 </Button>
               );
@@ -381,9 +426,12 @@ export default function ForksPage() {
                     {editingId ? "更新凭证、知识来源、模型与 Buzz 连接配置。" : "使用凭证连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。"}
                   </p>
                 </div>
-                <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
-                  <Bot className="size-5" />
-                </span>
+                <Avatar className="size-11 rounded-2xl">
+                  <AvatarImage src={avatarSource(draft.avatarPath)} alt="" />
+                  <AvatarFallback className="rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                    <Bot className="size-5" />
+                  </AvatarFallback>
+                </Avatar>
               </div>
 
               <div className="space-y-4">
@@ -427,6 +475,63 @@ export default function ForksPage() {
                     placeholder="知识域描述（可选，如：Artpal 前端问题）"
                     aria-label="知识域描述"
                   />
+                  <div className="mt-3 flex items-center gap-3 rounded-xl border bg-muted/30 p-3">
+                    <Avatar className="size-12 rounded-xl">
+                      <AvatarImage src={avatarSource(draft.avatarPath)} alt="分身头像预览" />
+                      <AvatarFallback className="rounded-xl bg-card text-muted-foreground">
+                        <Bot className="size-5" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">分身头像</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">PNG、JPEG 或 WebP，最大 2 MB</p>
+                    </div>
+                    {draft.avatarPath ? (
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setDraft({ ...draft, avatarPath: null })}>
+                        移除
+                      </Button>
+                    ) : null}
+                    <Button type="button" size="sm" variant="outline" onClick={chooseAvatar}>
+                      <ImagePlus className="size-3.5" />
+                      选择图片
+                    </Button>
+                  </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="gap-0 rounded-2xl py-5">
+                  <CardHeader className="mb-4 flex items-center gap-2.5 px-5">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                      <ShieldAlert className="size-[18px]" />
+                    </span>
+                    <div className="space-y-1">
+                      <CardTitle className="text-sm">角色与边界</CardTitle>
+                      <CardDescription className="text-xs">补充角色表达与更严格的回答限制，不会扩大分身权限</CardDescription>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4 px-5">
+                    <label className="block space-y-1.5">
+                      <span className="text-xs font-medium">额外设定（可选）</span>
+                      <Textarea
+                        value={draft.additionalInstructions}
+                        onChange={(event) => setDraft({ ...draft, additionalInstructions: event.target.value })}
+                        placeholder="例如：主要服务产品、研发和测试同事。回答先给结论，再列出关键依据。"
+                        maxLength={2000}
+                        rows={4}
+                      />
+                      <span className="block text-right text-[11px] text-muted-foreground">{draft.additionalInstructions.length}/2000</span>
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs font-medium">额外限制（可选）</span>
+                      <Textarea
+                        value={draft.additionalConstraints}
+                        onChange={(event) => setDraft({ ...draft, additionalConstraints: event.target.value })}
+                        placeholder="例如：不讨论人事、财务和客户隐私；涉及生产变更时只提供分析与验证步骤。"
+                        maxLength={2000}
+                        rows={4}
+                      />
+                      <span className="block text-right text-[11px] text-muted-foreground">{draft.additionalConstraints.length}/2000</span>
+                    </label>
                   </CardContent>
                 </Card>
 
@@ -698,9 +803,12 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onEdit
           <p className="mt-2 text-sm text-muted-foreground">创建于 {formatCreated(fork.createdAt)}</p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-3">
-          <span className="grid size-11 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
-            <Bot className="size-5" />
-          </span>
+          <Avatar className="size-11 rounded-2xl">
+            <AvatarImage src={avatarSource(fork.avatarPath)} alt="" />
+            <AvatarFallback className="rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+              <Bot className="size-5" />
+            </AvatarFallback>
+          </Avatar>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={onEdit} disabled={Boolean(busy)}>
               <Pencil className="size-3.5" />

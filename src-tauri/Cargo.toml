@@ -21,6 +21,6 @@ fork-core = { path = "fork-core" }
 secp256k1 = { version = "0.31", features = ["rand"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 zeroize = "1"

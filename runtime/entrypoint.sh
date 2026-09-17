@@ -19,6 +19,26 @@ fi
 install -m 0600 /opt/fork/secrets/profile.env /run/profile.env
 ln -sfn /run/profile.env "$profile_home/.env"
 
+set_profile() (
+    set -a
+    . /run/profile.env
+    set +a
+    if [ -f /opt/fork/profile-avatar ]; then
+        avatar_url="$(
+            /usr/local/bin/buzz upload file --file /opt/fork/profile-avatar \
+                | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["url"])'
+        )"
+        /usr/local/bin/buzz users set-profile \
+            --name "$FORK_PROFILE_NAME" \
+            --about "$FORK_PROFILE_ABOUT" \
+            --avatar "$avatar_url"
+    else
+        /usr/local/bin/buzz users set-profile \
+            --name "$FORK_PROFILE_NAME" \
+            --about "$FORK_PROFILE_ABOUT"
+    fi
+)
+
 profile_status=0
 profile_result="$({
     set -a
@@ -30,15 +50,8 @@ if [ "${profile_status:-0}" -ne 0 ] && ! printf '%s' "$profile_result" | grep -q
     echo "[fork] failed to read Buzz profile: $profile_result" >&2
     exit "$profile_status"
 fi
-if ! printf '%s' "$profile_result" | grep -q '"pubkey"'; then
-    (
-        set -a
-        . /run/profile.env
-        set +a
-        /usr/local/bin/buzz users set-profile \
-            --name "$FORK_PROFILE_NAME" \
-            --about "$FORK_PROFILE_ABOUT"
-    )
+if ! printf '%s' "$profile_result" | grep -q '"pubkey"' || [ -f /opt/fork/profile-avatar ]; then
+    set_profile
 fi
 
 /opt/hermes/.venv/bin/python /opt/fork/merge_config.py \

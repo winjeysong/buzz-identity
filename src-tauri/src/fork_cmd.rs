@@ -21,6 +21,12 @@ pub struct ForkDraft {
     identity_id: String,
     #[serde(default)]
     domain: Option<String>,
+    #[serde(default)]
+    avatar_path: Option<PathBuf>,
+    #[serde(default)]
+    additional_instructions: Option<String>,
+    #[serde(default)]
+    additional_constraints: Option<String>,
     knowledge_sources: Vec<KnowledgeSource>,
     model: ModelConfig,
     buzz: BuzzConfig,
@@ -45,13 +51,26 @@ fn new_fork_id() -> String {
     format!("fork-{}", millis)
 }
 
-fn render_persona(name: &str, domain: Option<&str>) -> Persona {
+fn render_persona(
+    name: &str,
+    domain: Option<&str>,
+    additional_instructions: Option<&str>,
+    additional_constraints: Option<&str>,
+) -> Persona {
     let domain = domain.unwrap_or(DEFAULT_DOMAIN);
     Persona {
         soul: SOUL_TEMPLATE
             .replace("{{FORK_NAME}}", name)
             .replace("{{OWNER_NAME}}", name)
-            .replace("{{DOMAIN}}", domain),
+            .replace("{{DOMAIN}}", domain)
+            .replace(
+                "{{ADDITIONAL_INSTRUCTIONS}}",
+                additional_instructions.unwrap_or("无额外设定。"),
+            )
+            .replace(
+                "{{ADDITIONAL_CONSTRAINTS}}",
+                additional_constraints.unwrap_or("无额外限制。"),
+            ),
         skill: SKILL_TEMPLATE.to_string(),
     }
 }
@@ -61,6 +80,24 @@ fn normalize_domain(input: Option<String>) -> Option<String> {
         let value = value.trim();
         (!value.is_empty()).then(|| value.to_string())
     })
+}
+
+fn normalize_prompt(input: Option<String>, label: &str) -> Result<Option<String>, String> {
+    let Some(value) = input else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 2000
+        || value
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\t')
+    {
+        return Err(format!("{label}最多 2000 个字符，且不能包含控制字符。"));
+    }
+    Ok(Some(value.to_string()))
 }
 
 fn validate_fork_name(input: &str) -> Result<String, String> {
@@ -128,6 +165,7 @@ fn summary_of(root: &std::path::Path, config: &ForkConfig) -> ForkSummary {
         name: config.name.clone(),
         created_at: config.created_at,
         identity_id: config.identity_id.clone(),
+        avatar_path: config.avatar_path.clone(),
         state,
         has_model_key: store::has_model_key(&config.id),
     }
@@ -161,19 +199,39 @@ pub fn create_fork(app: AppHandle, draft: ForkDraft) -> Result<ForkConfig, Strin
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
     let domain = normalize_domain(draft.domain);
-    let config = ForkConfig {
-        id: new_fork_id(),
+    let additional_instructions = normalize_prompt(draft.additional_instructions, "额外设定")?;
+    let additional_constraints = normalize_prompt(draft.additional_constraints, "额外限制")?;
+    let id = new_fork_id();
+    let mut config = ForkConfig {
+        id: id.clone(),
         name: name.clone(),
         created_at: millis,
         identity_id: draft.identity_id,
         domain: domain.clone(),
-        persona: render_persona(&name, domain.as_deref()),
+        avatar_path: None,
+        additional_instructions: additional_instructions.clone(),
+        additional_constraints: additional_constraints.clone(),
+        persona: render_persona(
+            &name,
+            domain.as_deref(),
+            additional_instructions.as_deref(),
+            additional_constraints.as_deref(),
+        ),
         knowledge_sources: draft.knowledge_sources,
         model: draft.model,
         buzz: draft.buzz,
         runtime: RuntimeState::default(),
     };
     store::create_fork_at(&root, &config)?;
+    config.avatar_path =
+        match store::replace_avatar_at(&root, &id, None, draft.avatar_path.as_deref()) {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = store::delete_fork_at(&root, &id);
+                return Err(error);
+            }
+        };
+    store::write_config_at(&root, &config)?;
     store::set_model_key(&config.id, draft.model_key.trim())?;
     Ok(config)
 }
@@ -192,27 +250,44 @@ pub fn update_fork(app: AppHandle, id: String, draft: ForkDraft) -> Result<ForkC
     let mut config = store::read_fork_at(&root, &id)?;
     let knowledge_changed = config.knowledge_sources != draft.knowledge_sources;
     let domain = normalize_domain(draft.domain);
+    let additional_instructions = normalize_prompt(draft.additional_instructions, "额外设定")?;
+    let additional_constraints = normalize_prompt(draft.additional_constraints, "额外限制")?;
+    let avatar_path = store::replace_avatar_at(
+        &root,
+        &id,
+        config.avatar_path.as_deref(),
+        draft.avatar_path.as_deref(),
+    )?;
     config.name = name.clone();
     config.identity_id = draft.identity_id;
     config.domain = domain.clone();
-    config.persona = render_persona(&name, domain.as_deref());
+    config.avatar_path = avatar_path;
+    config.additional_instructions = additional_instructions.clone();
+    config.additional_constraints = additional_constraints.clone();
+    config.persona = render_persona(
+        &name,
+        domain.as_deref(),
+        additional_instructions.as_deref(),
+        additional_constraints.as_deref(),
+    );
     config.knowledge_sources = draft.knowledge_sources;
     config.model = draft.model;
     config.buzz = draft.buzz;
     if knowledge_changed {
         config.runtime = RuntimeState::default();
     }
+    store::write_config_at(&root, &config)?;
+    if !draft.model_key.trim().is_empty() {
+        store::set_model_key(&id, draft.model_key.trim())?;
+    }
     docker::sync_profile(&docker::ProfileSyncSpec {
         image: DEFAULT_IMAGE.to_string(),
         env: runtime_env(&config),
         secret_parent: store::fork_dir(&root, &id)?,
         buzz_private_key: identity.private_key_hex,
-    })?;
-    store::write_config_at(&root, &config)?;
-
-    if !draft.model_key.trim().is_empty() {
-        store::set_model_key(&id, draft.model_key.trim())?;
-    }
+        avatar_path: config.avatar_path.clone(),
+    })
+    .map_err(|error| format!("配置已保存，但 Buzz Profile 同步失败：{error}"))?;
     Ok(config)
 }
 
@@ -259,7 +334,13 @@ pub fn docker_probe() -> docker::DockerStatus {
 #[tauri::command]
 pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
     let root = forks_root(&app)?;
-    let config = store::read_fork_at(&root, &id)?;
+    let mut config = store::read_fork_at(&root, &id)?;
+    config.persona = render_persona(
+        &config.name,
+        config.domain.as_deref(),
+        config.additional_instructions.as_deref(),
+        config.additional_constraints.as_deref(),
+    );
     let identities = identities_root(&app)?;
     let identity = read_identity_at(&identities, &config.identity_id)?;
     let model_key = store::get_model_key(&id)?;
@@ -297,6 +378,7 @@ pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
         buzz_private_key: identity.private_key_hex,
         model_key_env: provider_env_name(&config.model.provider).to_string(),
         model_key,
+        avatar_path: config.avatar_path.clone(),
         command: vec!["gateway".to_string(), "run".to_string()],
     };
     docker::run(&spec)
@@ -336,4 +418,30 @@ pub fn fork_logs(app: AppHandle, id: String, tail: usize) -> Result<String, Stri
     let root = forks_root(&app)?;
     store::read_fork_at(&root, &id)?;
     docker::logs(&container_name(&id), tail.min(500))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_optional_persona_sections_without_weakening_priority() {
+        let persona = render_persona(
+            "测试分身",
+            Some("测试知识域"),
+            Some("先给结论"),
+            Some("不讨论财务"),
+        );
+        assert!(persona.soul.contains("先给结论"));
+        assert!(persona.soul.contains("不讨论财务"));
+        assert!(persona
+            .soul
+            .contains("固定安全边界与回答契约 > 额外限制 > 额外设定"));
+        assert!(!persona.soul.contains("{{ADDITIONAL_"));
+    }
+
+    #[test]
+    fn rejects_oversized_persona_prompt() {
+        assert!(normalize_prompt(Some("字".repeat(2001)), "额外设定").is_err());
+    }
 }
