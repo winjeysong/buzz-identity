@@ -1,6 +1,8 @@
 use crate::snapshot::KnowledgeSource;
+use image::{DynamicImage, ImageFormat, ImageOutputFormat};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -76,6 +78,8 @@ pub struct ForkSummary {
 }
 
 const MAX_AVATAR_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_AVATAR_DIMENSION: u32 = 4096;
+const AVATAR_EDGE: u32 = 512;
 
 pub fn replace_avatar_at(
     root: &Path,
@@ -84,9 +88,6 @@ pub fn replace_avatar_at(
     source: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
     let dir = fork_dir(root, id)?;
-    if source == current && source.is_some_and(Path::is_file) {
-        return Ok(current.map(Path::to_path_buf));
-    }
     let Some(source) = source else {
         remove_managed_avatar(&dir, current)?;
         return Ok(None);
@@ -102,8 +103,8 @@ pub fn replace_avatar_at(
     if bytes.len() as u64 > MAX_AVATAR_BYTES {
         return Err("头像不能超过 2 MB。".into());
     }
-    let extension = avatar_extension(&bytes)?;
-    let target = dir.join(format!("avatar.{extension}"));
+    let bytes = normalize_avatar(&bytes)?;
+    let target = dir.join("avatar.png");
     let temporary = dir.join(".avatar.tmp");
     fs::write(&temporary, bytes).map_err(|error| format!("无法保存头像：{error}"))?;
     if target.exists() {
@@ -117,16 +118,30 @@ pub fn replace_avatar_at(
     Ok(Some(target))
 }
 
-fn avatar_extension(bytes: &[u8]) -> Result<&'static str, String> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Ok("png")
-    } else if bytes.starts_with(b"\xff\xd8\xff") {
-        Ok("jpg")
-    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Ok("webp")
-    } else {
-        Err("头像仅支持 PNG、JPEG 或 WebP。".into())
+fn normalize_avatar(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let format = image::guess_format(bytes).map_err(|_| "头像仅支持 PNG、JPEG 或 WebP。".to_string())?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP) {
+        return Err("头像仅支持 PNG、JPEG 或 WebP。".into());
     }
+    let (width, height) = image::io::Reader::with_format(Cursor::new(bytes), format)
+        .into_dimensions()
+        .map_err(|_| "头像文件已损坏。".to_string())?;
+    if width == 0 || height == 0 || width > MAX_AVATAR_DIMENSION || height > MAX_AVATAR_DIMENSION {
+        return Err("头像尺寸不能超过 4096×4096。".into());
+    }
+    let avatar = image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| "头像文件已损坏。".to_string())?
+        .thumbnail(AVATAR_EDGE, AVATAR_EDGE);
+    let avatar = if avatar.color().has_alpha() {
+        DynamicImage::ImageRgba8(avatar.to_rgba8())
+    } else {
+        DynamicImage::ImageRgb8(avatar.to_rgb8())
+    };
+    let mut output = Cursor::new(Vec::new());
+    avatar
+        .write_to(&mut output, ImageOutputFormat::Png)
+        .map_err(|error| format!("无法规范化头像：{error}"))?;
+    Ok(output.into_inner())
 }
 
 fn remove_managed_avatar(dir: &Path, current: Option<&Path>) -> Result<(), String> {
@@ -353,11 +368,34 @@ mod tests {
 
     #[test]
     fn stores_and_removes_valid_avatar() {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = u32::MAX;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
+                }
+            }
+            !crc
+        }
+
         let root = temp_root("avatar");
         let config = sample("fork-d4");
         create_fork_at(&root, &config).unwrap();
         let source = root.join("source.png");
-        fs::write(&source, b"\x89PNG\r\n\x1a\nimage").unwrap();
+        let mut source_bytes = Cursor::new(Vec::new());
+        DynamicImage::new_rgb8(1024, 600)
+            .write_to(&mut source_bytes, ImageOutputFormat::Png)
+            .unwrap();
+        let mut source_bytes = source_bytes.into_inner();
+        let mut metadata_chunk = Vec::new();
+        metadata_chunk.extend_from_slice(&(4u32).to_be_bytes());
+        metadata_chunk.extend_from_slice(b"caBX");
+        metadata_chunk.extend_from_slice(b"c2pa");
+        metadata_chunk.extend_from_slice(&crc32(b"caBXc2pa").to_be_bytes());
+        source_bytes.splice(33..33, metadata_chunk);
+        assert!(source_bytes.windows(4).any(|chunk| chunk == b"caBX"));
+        fs::write(&source, source_bytes).unwrap();
 
         let avatar = replace_avatar_at(&root, "fork-d4", None, Some(&source)).unwrap();
         assert_eq!(
@@ -365,6 +403,11 @@ mod tests {
             Some("png".as_ref())
         );
         assert!(avatar.as_ref().unwrap().is_file());
+        assert_eq!(image::image_dimensions(avatar.as_ref().unwrap()).unwrap(), (512, 300));
+        assert!(!fs::read(avatar.as_ref().unwrap())
+            .unwrap()
+            .windows(4)
+            .any(|chunk| chunk == b"caBX"));
         assert!(replace_avatar_at(&root, "fork-d4", avatar.as_deref(), None)
             .unwrap()
             .is_none());

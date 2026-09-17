@@ -198,6 +198,8 @@ fn sync_profile_args(spec: &ProfileSyncSpec, secret_dir: &Path) -> Vec<String> {
         "32".into(),
         "--user".into(),
         "10000:10000".into(),
+        "--entrypoint".into(),
+        "/bin/sh".into(),
         "--mount".into(),
         format!(
             "type=bind,src={},dst=/opt/fork/secrets/profile.env,readonly",
@@ -221,9 +223,8 @@ fn sync_profile_args(spec: &ProfileSyncSpec, secret_dir: &Path) -> Vec<String> {
     }
     args.push(spec.image.clone());
     args.extend([
-        "/bin/sh".into(),
         "-ceu".into(),
-        "set -a; . /opt/fork/secrets/profile.env; set +a; avatar_url=''; if [ -f /opt/fork/profile-avatar ]; then avatar_url=\"$(/usr/local/bin/buzz upload file --file /opt/fork/profile-avatar | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)[\"url\"])')\"; fi; exec /usr/local/bin/buzz users set-profile --name \"$FORK_PROFILE_NAME\" --about \"$FORK_PROFILE_ABOUT\" --avatar \"$avatar_url\"".into(),
+        "set -a; . /opt/fork/secrets/profile.env; set +a; avatar_url=''; if [ -f /opt/fork/profile-avatar ]; then avatar_result=\"$(/usr/local/bin/buzz upload file --file /opt/fork/profile-avatar)\"; avatar_url=\"$(printf '%s' \"$avatar_result\" | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)[\"url\"])')\"; fi; exec /usr/local/bin/buzz users set-profile --name \"$FORK_PROFILE_NAME\" --about \"$FORK_PROFILE_ABOUT\" --avatar \"$avatar_url\"".into(),
     ]);
     args
 }
@@ -478,6 +479,7 @@ mod tests {
         let sync_args = sync_profile_args(&sync_spec, Path::new("/tmp/fork-test/secrets"));
         let sync_command = sync_args.join(" ");
         assert!(sync_command.contains("--rm"));
+        assert!(sync_command.contains("--entrypoint /bin/sh"));
         assert!(sync_command.contains("users set-profile"));
         assert!(sync_command.contains("upload file --file /opt/fork/profile-avatar"));
         assert!(sync_command.contains("--avatar \"$avatar_url\""));

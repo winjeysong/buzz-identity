@@ -24,10 +24,9 @@ set_profile() (
     . /run/profile.env
     set +a
     if [ -f /opt/fork/profile-avatar ]; then
-        avatar_url="$(
-            /usr/local/bin/buzz upload file --file /opt/fork/profile-avatar \
-                | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["url"])'
-        )"
+        avatar_result="$(/usr/local/bin/buzz upload file --file /opt/fork/profile-avatar)"
+        avatar_url="$(printf '%s' "$avatar_result" \
+            | /opt/hermes/.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["url"])')"
         /usr/local/bin/buzz users set-profile \
             --name "$FORK_PROFILE_NAME" \
             --about "$FORK_PROFILE_ABOUT" \

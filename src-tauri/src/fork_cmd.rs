@@ -335,6 +335,15 @@ pub fn docker_probe() -> docker::DockerStatus {
 pub fn start_fork(app: AppHandle, id: String) -> Result<(), String> {
     let root = forks_root(&app)?;
     let mut config = store::read_fork_at(&root, &id)?;
+    if let Some(current_avatar) = config.avatar_path.clone() {
+        config.avatar_path = store::replace_avatar_at(
+            &root,
+            &id,
+            Some(&current_avatar),
+            Some(&current_avatar),
+        )?;
+        store::write_config_at(&root, &config)?;
+    }
     config.persona = render_persona(
         &config.name,
         config.domain.as_deref(),
