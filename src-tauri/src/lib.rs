@@ -53,10 +53,10 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_key_hex(prefix: &str, value: &str) -> Result<String, String> {
-    let (hrp, bytes) = bech32::decode(value).map_err(|_| "身份密钥已损坏。".to_string())?;
+    let (hrp, bytes) = bech32::decode(value).map_err(|_| "凭证密钥已损坏。".to_string())?;
     let expected = Hrp::parse(prefix).expect("fixed NIP-19 prefix must be valid");
     if hrp != expected || bytes.len() != 32 {
-        return Err("身份密钥已损坏。".to_string());
+        return Err("凭证密钥已损坏。".to_string());
     }
     Ok(encode_hex(&bytes))
 }
@@ -64,17 +64,17 @@ fn decode_key_hex(prefix: &str, value: &str) -> Result<String, String> {
 fn validate_name(input: &str) -> Result<String, String> {
     let name = input.trim();
     if name.is_empty() {
-        return Err("身份名称不能为空。".to_string());
+        return Err("凭证名称不能为空。".to_string());
     }
     if name.chars().count() > 80 || name.chars().any(char::is_control) {
-        return Err("身份名称最多 80 个字符，且不能包含控制字符。".to_string());
+        return Err("凭证名称最多 80 个字符，且不能包含控制字符。".to_string());
     }
     Ok(name.to_string())
 }
 
 fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 40 || !id.chars().all(|character| character.is_ascii_digit()) {
-        return Err("身份记录无效。".to_string());
+        return Err("凭证记录无效。".to_string());
     }
     Ok(())
 }
@@ -102,9 +102,9 @@ fn write_new_file(path: &Path, value: &[u8]) -> Result<(), String> {
 
     let mut file = options
         .open(path)
-        .map_err(|error| format!("无法创建身份文件：{error}"))?;
+        .map_err(|error| format!("无法创建凭证文件：{error}"))?;
     file.write_all(value)
-        .map_err(|error| format!("无法写入身份文件：{error}"))
+        .map_err(|error| format!("无法写入凭证文件：{error}"))
 }
 
 fn timestamp() -> Result<(String, u64), String> {
@@ -124,12 +124,12 @@ fn create_identity_at(
     validate_id(&id)?;
     let name = validate_name(&name)?;
     let target = root.join(&id);
-    fs::create_dir(&target).map_err(|error| format!("无法创建身份目录：{error}"))?;
+    fs::create_dir(&target).map_err(|error| format!("无法创建凭证目录：{error}"))?;
 
     #[cfg(unix)]
     if let Err(error) = fs::set_permissions(&target, fs::Permissions::from_mode(0o700)) {
         let _ = fs::remove_dir(&target);
-        return Err(format!("无法设置身份目录权限：{error}"));
+        return Err(format!("无法设置凭证目录权限：{error}"));
     }
 
     let secp = Secp256k1::new();
@@ -149,7 +149,7 @@ fn create_identity_at(
 
     let write_result = (|| {
         let metadata =
-            serde_json::to_vec(&summary).map_err(|error| format!("无法保存身份信息：{error}"))?;
+            serde_json::to_vec(&summary).map_err(|error| format!("无法保存凭证信息：{error}"))?;
         write_new_file(&target.join(PRIVATE_KEY_FILE), private_key.as_bytes())?;
         write_new_file(&target.join(PUBLIC_KEY_FILE), public_key.as_bytes())?;
         write_new_file(&target.join(METADATA_FILE), &metadata)?;
@@ -173,19 +173,19 @@ fn create_identity_at(
 
 fn read_summary(target: &Path) -> Result<IdentitySummary, String> {
     let value = fs::read_to_string(target.join(METADATA_FILE))
-        .map_err(|error| format!("无法读取身份信息：{error}"))?;
-    serde_json::from_str(&value).map_err(|error| format!("身份信息已损坏：{error}"))
+        .map_err(|error| format!("无法读取凭证信息：{error}"))?;
+    serde_json::from_str(&value).map_err(|error| format!("凭证信息已损坏：{error}"))
 }
 
 fn list_identities_at(root: &Path) -> Result<Vec<IdentitySummary>, String> {
     ensure_root(root)?;
     let mut identities = Vec::new();
-    for entry in fs::read_dir(root).map_err(|error| format!("无法读取身份列表：{error}"))?
+    for entry in fs::read_dir(root).map_err(|error| format!("无法读取凭证列表：{error}"))?
     {
-        let entry = entry.map_err(|error| format!("无法读取身份列表：{error}"))?;
+        let entry = entry.map_err(|error| format!("无法读取凭证列表：{error}"))?;
         if entry
             .file_type()
-            .map_err(|error| format!("无法读取身份列表：{error}"))?
+            .map_err(|error| format!("无法读取凭证列表：{error}"))?
             .is_dir()
         {
             let summary = read_summary(&entry.path())?;
@@ -202,7 +202,7 @@ pub(crate) fn read_identity_at(root: &Path, id: &str) -> Result<IdentityDetail, 
     let target = root.join(id);
     let summary = read_summary(&target)?;
     if summary.id != id {
-        return Err("身份记录已损坏。".to_string());
+        return Err("凭证记录已损坏。".to_string());
     }
     let public_key = fs::read_to_string(target.join(PUBLIC_KEY_FILE))
         .map_err(|error| format!("无法读取公钥：{error}"))?;
@@ -226,13 +226,13 @@ fn rename_identity_at(root: &Path, id: &str, name: &str) -> Result<IdentitySumma
     let target = root.join(id);
     let mut summary = read_summary(&target)?;
     if summary.id != id {
-        return Err("身份记录已损坏。".to_string());
+        return Err("凭证记录已损坏。".to_string());
     }
     summary.name = validate_name(name)?;
     let metadata =
-        serde_json::to_vec(&summary).map_err(|error| format!("无法保存身份信息：{error}"))?;
+        serde_json::to_vec(&summary).map_err(|error| format!("无法保存凭证信息：{error}"))?;
     fs::write(target.join(METADATA_FILE), metadata)
-        .map_err(|error| format!("无法保存身份名称：{error}"))?;
+        .map_err(|error| format!("无法保存凭证名称：{error}"))?;
     Ok(summary)
 }
 
@@ -240,9 +240,9 @@ fn delete_identity_at(root: &Path, id: &str) -> Result<(), String> {
     validate_id(id)?;
     let target = root.join(id);
     if !target.is_dir() {
-        return Err("身份记录不存在。".to_string());
+        return Err("凭证记录不存在。".to_string());
     }
-    fs::remove_dir_all(target).map_err(|error| format!("无法删除身份记录：{error}"))
+    fs::remove_dir_all(target).map_err(|error| format!("无法删除凭证记录：{error}"))
 }
 
 #[tauri::command]

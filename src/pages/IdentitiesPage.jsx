@@ -13,7 +13,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -69,7 +68,7 @@ function KeyCard({ icon: Icon, label, values, copied, onCopy, privateKey = false
         <div>
           <h2 className="text-sm font-semibold">{label}</h2>
           <p className="text-xs text-muted-foreground">
-            {privateKey ? "请勿发送给任何人" : "可发送给 Buzz 管理员"}
+            {privateKey ? "请勿发送给任何人" : "可发送给管理员"}
           </p>
         </div>
       </div>
@@ -116,7 +115,8 @@ export default function IdentitiesPage() {
   const [error, setError] = useState("");
   const [isBooting, setIsBooting] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
+  const [isCreateForm, setIsCreateForm] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const selectionRequest = useRef(0);
 
@@ -132,7 +132,6 @@ export default function IdentitiesPage() {
         const values = await invoke("list_identities");
         if (cancelled) return;
         setIdentities(values);
-        if (values.length > 0) await selectIdentity(values[0].id);
       } catch (reason) {
         if (!cancelled) setError(String(reason));
       } finally {
@@ -147,6 +146,7 @@ export default function IdentitiesPage() {
 
   async function selectIdentity(id) {
     const request = ++selectionRequest.current;
+    setIsCreateForm(false);
     setSelectedId(id);
     setIsLoadingDetail(true);
     setError("");
@@ -160,18 +160,25 @@ export default function IdentitiesPage() {
     }
   }
 
-  function showCreate() {
+  function showWelcome() {
     selectionRequest.current += 1;
     setSelectedId("");
     setDetail(null);
     setIsLoadingDetail(false);
+    setIsCreateForm(false);
+    setNewName("");
     setError("");
+  }
+
+  function showCreate() {
+    showWelcome();
+    setIsCreateForm(true);
   }
 
   async function createIdentity(event) {
     event.preventDefault();
-    if (!invoke || isCreating) return;
-    setIsCreating(true);
+    if (!invoke || isGenerating) return;
+    setIsGenerating(true);
     setError("");
     try {
       const created = await invoke("generate_identity", {
@@ -180,11 +187,12 @@ export default function IdentitiesPage() {
       setIdentities((current) => [summaryOf(created), ...current]);
       setSelectedId(created.id);
       setDetail(created);
+      setIsCreateForm(false);
       setNewName("");
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setIsCreating(false);
+      setIsGenerating(false);
     }
   }
 
@@ -218,8 +226,7 @@ export default function IdentitiesPage() {
       const remaining = identities.filter((identity) => identity.id !== deleteTarget.id);
       setIdentities(remaining);
       if (selectedId === deleteTarget.id) {
-        showCreate();
-        if (remaining.length > 0) await selectIdentity(remaining[0].id);
+        showWelcome();
       }
       setDeleteTarget(null);
       setError("");
@@ -245,10 +252,10 @@ export default function IdentitiesPage() {
       <aside className="flex w-[clamp(260px,28vw,320px)] shrink-0 flex-col border-r bg-sidebar">
         <header className="flex h-[76px] items-center gap-3 border-b px-5">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">我的身份</p>
-            <p className="text-xs tabular-nums text-muted-foreground">{identities.length} 个身份</p>
+            <p className="truncate text-sm font-semibold">我的凭证</p>
+            <p className="text-xs tabular-nums text-muted-foreground">{identities.length} 个凭证</p>
           </div>
-          <Button size="icon" onClick={showCreate} aria-label="创建身份" title="创建身份">
+          <Button size="icon" onClick={showCreate} disabled={isGenerating} aria-label="创建凭证" title="创建凭证">
             <Plus className="size-[18px]" />
           </Button>
         </header>
@@ -256,7 +263,7 @@ export default function IdentitiesPage() {
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
           {identities.length === 0 && !isBooting ? (
             <p className="px-2 py-8 text-center text-xs leading-5 text-muted-foreground">
-              尚未创建身份
+              尚未创建凭证
             </p>
           ) : null}
 
@@ -283,7 +290,7 @@ export default function IdentitiesPage() {
                         if (event.key === "Escape") setRenamingId("");
                       }}
                       className="h-9 min-w-0 bg-card"
-                      aria-label="身份名称"
+                      aria-label="凭证名称"
                     />
                     <Button
                       size="icon"
@@ -372,7 +379,7 @@ export default function IdentitiesPage() {
             <div className="mb-8 flex items-start justify-between gap-6">
               <div className="min-w-0">
                 <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-primary dark:text-sidebar-primary">
-                  身份密钥
+                  凭证密钥
                 </p>
                 <h1 className="truncate text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">
                   {detail.name}
@@ -412,37 +419,47 @@ export default function IdentitiesPage() {
 
             <p className="mt-5 flex items-start gap-2 text-xs leading-5 text-muted-foreground">
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary dark:text-sidebar-primary" />
-              只需把公钥交给管理员。私钥代表你的身份，泄露后应立即删除并重新生成。
+              只需把公钥交给管理员。私钥代表你的凭证，泄露后应立即删除并重新生成。
             </p>
           </div>
         ) : (
           <div className="grid h-full min-h-[520px] place-items-center px-8">
             <section className="w-full max-w-[420px] text-center">
-              <img src={appIcon} alt="" className="mx-auto size-20 rounded-2xl shadow-sm" />
-              <h1 className="mt-6 text-2xl font-semibold tracking-tight">创建 Buzz 身份</h1>
+              <span className="mx-auto grid size-20 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
+                <KeyRound className="size-9" />
+              </span>
+              <h1 className="mt-6 text-2xl font-semibold tracking-tight">
+                {isCreateForm ? "创建凭证" : "创建你的凭证"}
+              </h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                密钥将在本机安全生成并自动保存。
+                {isCreateForm ? "密钥将在本机安全生成并自动保存。" : "选择左侧凭证查看密钥，或创建一个新的凭证。"}
               </p>
-              <form className="mt-7 space-y-3 text-left" onSubmit={createIdentity}>
-                <Input
-                  maxLength={80}
-                  value={newName}
-                  onChange={(event) => setNewName(event.target.value)}
-                  placeholder="身份名称（可选）"
-                  aria-label="身份名称"
-                />
-                <Button className="w-full" type="submit" disabled={!invoke || isCreating}>
-                  {isCreating ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <Plus className="size-4" />
-                  )}
-                  {isCreating ? "正在生成" : "生成新身份"}
+              {isCreateForm ? (
+                <form className="mt-7 space-y-3 text-left" onSubmit={createIdentity}>
+                  <Input
+                    maxLength={80}
+                    value={newName}
+                    onChange={(event) => setNewName(event.target.value)}
+                    placeholder="凭证名称（可选）"
+                    aria-label="凭证名称"
+                  />
+                  <div className="flex justify-center gap-3">
+                    <Button type="submit" disabled={!invoke || isGenerating}>
+                      {isGenerating ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                      {isGenerating ? "正在生成" : "生成新凭证"}
+                    </Button>
+                    <Button type="button" variant="ghost" onClick={showWelcome} disabled={isGenerating}>
+                      取消
+                    </Button>
+                  </div>
+                  <p className="text-center text-xs text-muted-foreground">留空时使用当前时间作为记录名称</p>
+                </form>
+              ) : (
+                <Button className="mt-7" onClick={showCreate} disabled={!invoke}>
+                  <Plus className="size-4" />
+                  新建凭证
                 </Button>
-              </form>
-              <p className="mt-3 text-xs text-muted-foreground">
-                留空时使用当前时间作为记录名称
-              </p>
+              )}
             </section>
           </div>
         )}
@@ -451,7 +468,7 @@ export default function IdentitiesPage() {
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除这个身份？</AlertDialogTitle>
+          <AlertDialogTitle>删除这个凭证？</AlertDialogTitle>
             <AlertDialogDescription>
               “{deleteTarget?.name}”的公钥和私钥将从当前设备永久删除，此操作无法撤销。
             </AlertDialogDescription>
@@ -463,7 +480,7 @@ export default function IdentitiesPage() {
             <AlertDialogAction asChild>
               <Button variant="destructive" onClick={deleteIdentity} disabled={isDeleting}>
                 {isDeleting ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                删除身份
+                删除凭证
               </Button>
             </AlertDialogAction>
           </AlertDialogFooter>

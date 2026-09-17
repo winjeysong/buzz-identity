@@ -8,7 +8,7 @@ import IdentitiesPage from "@/pages/IdentitiesPage";
 import SettingsPage from "@/pages/SettingsPage";
 
 const NAV_ITEMS = [
-  { key: "identities", label: "身份", icon: KeyRound },
+  { key: "identities", label: "凭证", icon: KeyRound },
   { key: "forks", label: "分身", icon: Bot },
   { key: "settings", label: "设置", icon: Settings },
 ];

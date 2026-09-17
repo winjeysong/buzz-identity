@@ -294,7 +294,7 @@ export default function ForksPage() {
             onClick={startCreate}
             disabled={isBooting || identities.length === 0}
             aria-label="创建分身"
-            title={identities.length === 0 ? "请先创建身份" : "创建分身"}
+            title={identities.length === 0 ? "请先创建凭证" : "创建分身"}
           >
             <Plus className="size-[18px]" />
           </Button>
@@ -304,7 +304,7 @@ export default function ForksPage() {
             <p className="px-2 py-8 text-center text-xs leading-5 text-muted-foreground">
               尚未创建分身
               <br />
-              {identities.length === 0 ? "请先在身份 Tab 创建身份" : "点击右上角 + 开始"}
+              {identities.length === 0 ? "请先在凭证 Tab 创建凭证" : "点击右上角 + 开始"}
             </p>
           ) : null}
           <div className="space-y-1">
@@ -378,7 +378,7 @@ export default function ForksPage() {
                   <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-primary dark:text-sidebar-primary">分身</p>
                   <h1 className="text-[clamp(1.75rem,3vw,2.25rem)] font-semibold tracking-tight">{editingId ? "编辑分身" : "创建分身"}</h1>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    {editingId ? "更新身份、知识来源、模型与 Buzz 连接配置。" : "使用身份连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。"}
+                    {editingId ? "更新凭证、知识来源、模型与 Buzz 连接配置。" : "使用凭证连接 Buzz，并从指定的 Git 仓库与本地目录获取知识。"}
                   </p>
                 </div>
                 <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary dark:text-sidebar-primary">
@@ -394,7 +394,7 @@ export default function ForksPage() {
                     </span>
                     <div className="space-y-1">
                       <CardTitle className="text-sm">基本信息</CardTitle>
-                      <CardDescription className="text-xs">为分身命名并选择它使用的身份</CardDescription>
+                      <CardDescription className="text-xs">为分身命名并选择它使用的凭证</CardDescription>
                     </div>
                   </CardHeader>
                   <CardContent className="px-5">
@@ -410,8 +410,8 @@ export default function ForksPage() {
                       value={draft.identityId}
                       onValueChange={(identityId) => setDraft({ ...draft, identityId })}
                     >
-                      <SelectTrigger className="w-full" aria-label="选择身份">
-                        <SelectValue placeholder="选择身份…" />
+                      <SelectTrigger className="w-full" aria-label="选择凭证">
+                        <SelectValue placeholder="选择凭证…" />
                       </SelectTrigger>
                       <SelectContent>
                         {identities.map((identity) => (
@@ -610,12 +610,12 @@ export default function ForksPage() {
                 </span>
                 <h1 className="mt-6 text-2xl font-semibold tracking-tight">创建你的分身</h1>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  绑定身份与知识来源，本机 Docker 运行，<br />
+                  绑定凭证与知识来源，本机 Docker 运行，<br />
                   同事即可在 Buzz 中 @ 它提问。
                 </p>
                 <Button className="mt-7" onClick={startCreate} disabled={identities.length === 0}>
                   <Plus className="size-4" />
-                  {identities.length === 0 ? "请先创建身份" : "新建分身"}
+                  {identities.length === 0 ? "请先创建凭证" : "新建分身"}
                 </Button>
               </section>
             </div>
@@ -780,7 +780,7 @@ function ForkDetail({ fork, busy, logs, onBuild, onStart, onStop, onLogs, onEdit
                 <ShieldAlert className="mt-0.5 size-4 shrink-0 text-primary dark:text-sidebar-primary" />
                 <div className="min-w-0 flex-1 space-y-2 text-sm leading-6 text-foreground">
                   <p className="font-medium">
-                    {profileMissing ? "该身份尚未设置 Buzz Profile。" : "该身份还不是 Relay 工作区成员，无法接收消息。"}
+                    {profileMissing ? "该凭证尚未设置 Buzz Profile。" : "该凭证还不是 Relay 工作区成员，无法接收消息。"}
                   </p>
                   <p className="text-xs">
                     {profileMissing
