@@ -4,7 +4,7 @@ members = ["fork-core"]
 [package]
 name = "buzz-identity"
 version = "0.1.4"
-description = "Local Artpal Buzz identity and knowledge fork client"
+description = "Local Buzz clone and knowledge workspace client"
 edition = "2021"
 rust-version = "1.77.2"
 

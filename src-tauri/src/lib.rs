@@ -297,7 +297,7 @@ pub fn run() {
             fork_cmd::fork_identity_public_key
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Buzz Identity");
+        .expect("error while running Kaiwu Clone");
 }
 
 #[cfg(test)]

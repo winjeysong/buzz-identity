@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-Artpal Buzz Identity 是团队的**分身工坊**桌面客户端（Tauri 2 + React 19）：
+开物分身（Kaiwu Clone）是团队的**分身工坊**桌面客户端（Tauri 2 + React 19）：
 
 1. **身份**：为 Buzz/Nostr 生成本机身份（公私钥），展示 NIP-19 与 Hex 格式。
 2. **分身**：把身份 + 知识来源（Git 仓库 / 本地目录）+ 模型凭据组装成"知识分身"，在本机 Docker 中运行并接入 Buzz Relay，供 Relay 成员 @ 提问。

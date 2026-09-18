@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Artpal Buzz Identity",
+  "productName": "Kaiwu Clone",
   "version": "0.1.4",
   "identifier": "com.artpalstudio.buzz-identity",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Artpal Buzz Identity",
+        "title": "开物分身",
         "width": 1040,
         "height": 700,
         "minWidth": 780,
@@ -41,7 +41,7 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "Manage local Buzz identities and knowledge forks",
+    "shortDescription": "Create and run local Buzz clones",
     "macOS": {
       "signingIdentity": "-"
     }

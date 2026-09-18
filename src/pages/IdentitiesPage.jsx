@@ -124,7 +124,7 @@ export default function IdentitiesPage() {
     let cancelled = false;
     async function load() {
       if (!invoke) {
-        setError("请在 Artpal Buzz Identity 客户端中运行。");
+        setError("请在开物分身客户端中运行。");
         setIsBooting(false);
         return;
       }

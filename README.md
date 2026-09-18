@@ -1,4 +1,4 @@
-# Artpal Buzz Identity
+# 开物分身 · Kaiwu Clone
 
 团队的 Buzz 分身工坊桌面客户端。可以在本机管理 Nostr 身份，将 Git 仓库或本地目录构建为知识快照，并用 Docker 运行接入 Buzz Relay 的分身。
 
