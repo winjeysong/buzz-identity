@@ -446,6 +446,9 @@ mod tests {
         assert!(persona
             .soul
             .contains("固定安全边界与回答契约 > 额外限制 > 额外设定"));
+        assert!(persona
+            .soul
+            .contains("DM 中对方明确要求记住、更新或删除其长期偏好或约定时"));
         assert!(!persona.soul.contains("{{ADDITIONAL_"));
     }
 
